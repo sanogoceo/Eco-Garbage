@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const User = require('../models/User');
+const AuthSession = require('../models/AuthSession');
+const AdminActionGrant = require('../models/AdminActionGrant');
 const Notification = require('../models/Notification');
 const { sendVerificationEmail, sendResetPasswordEmail } = require('../services/emailService');
 
@@ -20,12 +22,41 @@ const validatePhone = (phone) => {
   return null;
 };
 
-const generateToken = (user) =>
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const generateToken = (user, sessionId) =>
   jwt.sign(
-    { id: user.id || user._id.toString(), uuid: user.uuid, email: user.email, role: user.role, name: user.name },
+    {
+      id: user.id || user._id.toString(),
+      uuid: user.uuid,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      type: 'access',
+      sid: sessionId,
+    },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
+
+const createSession = async (userId, req) => {
+  const deviceId = req.get('X-Eco-Device-ID') || req.ip || 'unknown';
+  const fingerprint = crypto.createHash('sha256').update(`${deviceId}:${req.ip || ''}`).digest('hex');
+  const platform = req.get('X-Eco-Platform') || 'web';
+  const deviceName = (req.get('X-Eco-Device-Name') || req.get('user-agent') || '').slice(0, 200);
+  const sessionId = uuidv4();
+  await AuthSession.create({
+    uuid: sessionId,
+    user_id: userId,
+    device_fingerprint: fingerprint,
+    ip_fingerprint: req.ip ? crypto.createHash('sha256').update(req.ip).digest('hex') : undefined,
+    device_name: deviceName,
+    platform: ['android', 'ios', 'web'].includes(platform) ? platform : 'web',
+    user_agent: (req.get('user-agent') || '').slice(0, 500),
+    expires_at: new Date(Date.now() + SESSION_TTL_MS),
+  });
+  return sessionId;
+};
 
 
 const register = async (req, res) => {
@@ -140,9 +171,10 @@ const login = async (req, res) => {
     if (!valid)
       return res.status(401).json({ success: false, message: 'Email ou mot de passe incorrect' });
 
+    const sessionId = await createSession(userDoc._id, req);
     const obj = userDoc.toObject({ virtuals: true });
     const { password_hash, ...safeUser } = obj;
-    const token = generateToken(safeUser);
+    const token = generateToken(safeUser, sessionId);
     res.json({ success: true, message: 'Connexion reussie', data: { token, user: safeUser } });
   } catch (err) {
     console.error('login error:', err);
@@ -312,4 +344,109 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, updateProfile, changePassword, verifyEmail, resendVerification, forgotPassword, resetPassword };
+const logout = async (req, res) => {
+  try {
+    await AuthSession.updateOne(
+      { uuid: req.session.uuid, user_id: req.user.id, revoked_at: null },
+      { $set: { revoked_at: new Date(), revocation_reason: 'user_logout' } }
+    );
+    res.json({ success: true, message: 'Deconnecte avec succes' });
+  } catch (err) {
+    console.error('logout error:', err);
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const listSessions = async (req, res) => {
+  try {
+    const sessions = await AuthSession.find({
+      user_id: req.user.id,
+      revoked_at: null,
+      expires_at: { $gt: new Date() },
+    }).select('uuid device_name platform last_seen_at created_at').lean();
+    res.json({ success: true, data: sessions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const revokeSession = async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    if (uuid === req.session.uuid)
+      return res.status(400).json({ success: false, message: 'Utilisez /logout pour terminer la session actuelle' });
+    const result = await AuthSession.updateOne(
+      { uuid, user_id: req.user.id, revoked_at: null },
+      { $set: { revoked_at: new Date(), revoked_by: req.user.id, revocation_reason: 'user_revoked' } }
+    );
+    if (result.matchedCount === 0)
+      return res.status(404).json({ success: false, message: 'Session introuvable' });
+    res.json({ success: true, message: 'Session revoquee' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const revokeOtherSessions = async (req, res) => {
+  try {
+    await AuthSession.updateMany(
+      { user_id: req.user.id, uuid: { $ne: req.session.uuid }, revoked_at: null },
+      { $set: { revoked_at: new Date(), revoked_by: req.user.id, revocation_reason: 'user_revoked_others' } }
+    );
+    res.json({ success: true, message: 'Autres sessions revoquees' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const createAdminStepUp = async (req, res) => {
+  try {
+    const { scope, password } = req.body;
+    const validScopes = ['collector_review', 'user_status', 'payment_refund', 'service_configuration', 'business_contract_review'];
+    if (!scope || !validScopes.includes(scope))
+      return res.status(400).json({ success: false, message: 'Scope invalide' });
+    if (!password)
+      return res.status(400).json({ success: false, message: 'Mot de passe requis' });
+    const userDoc = await User.findById(req.user.id).select('+password_hash');
+    if (!userDoc) return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
+    const valid = await bcrypt.compare(password, userDoc.password_hash);
+    if (!valid) return res.status(401).json({ success: false, message: 'Mot de passe incorrect' });
+    const grantUuid = uuidv4();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await AdminActionGrant.create({
+      uuid: grantUuid,
+      user_id: req.user.id,
+      session_uuid: req.session.uuid,
+      scope,
+      expires_at: expiresAt,
+    });
+    const stepUpToken = jwt.sign(
+      { type: 'admin_step_up', id: req.user.id, sid: req.session.uuid, scope, grant: grantUuid },
+      process.env.JWT_SECRET,
+      { expiresIn: '5m' }
+    );
+    res.json({ success: true, data: { token: stepUpToken } });
+  } catch (err) {
+    console.error('createAdminStepUp error:', err);
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const notImplemented = (_req, res) =>
+  res.status(501).json({ success: false, message: 'Fonctionnalite non disponible' });
+
+const startTwoFactorSetup = notImplemented;
+const confirmTwoFactorSetup = notImplemented;
+const verifyTwoFactorLogin = notImplemented;
+const enrollTwoFactor = notImplemented;
+const enableTwoFactor = notImplemented;
+const disableTwoFactor = notImplemented;
+
+module.exports = {
+  register, login, getMe, updateProfile, changePassword,
+  verifyEmail, resendVerification, forgotPassword, resetPassword,
+  logout, listSessions, revokeSession, revokeOtherSessions,
+  createAdminStepUp,
+  startTwoFactorSetup, confirmTwoFactorSetup, verifyTwoFactorLogin,
+  enrollTwoFactor, enableTwoFactor, disableTwoFactor,
+};
