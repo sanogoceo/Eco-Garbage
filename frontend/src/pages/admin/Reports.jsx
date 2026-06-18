@@ -46,7 +46,13 @@ export default function AdminReports() {
         }
       />
 
-      {loading ? <PageLoader /> : !data ? null : (
+      {loading ? <PageLoader /> : !data ? (
+        <div className="card p-12 text-center text-gray-400">
+          <p className="text-4xl mb-3">📊</p>
+          <p className="font-semibold">{isEn ? 'Unable to load reports' : 'Impossible de charger les rapports'}</p>
+          <p className="text-sm mt-1">{isEn ? 'Check your connection or try another period.' : 'Vérifiez votre connexion ou essayez une autre période.'}</p>
+        </div>
+      ) : (
         <div className="flex flex-col gap-6">
 
           {data.dailyRevenue?.length > 0 && (

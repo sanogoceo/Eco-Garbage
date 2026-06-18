@@ -3,37 +3,53 @@ import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom'
 import {
   Leaf, LayoutDashboard, Plus, ListOrdered, CreditCard,
   MessageSquare, Bell, Settings, LogOut, Truck, Users,
-  BarChart3, Tag, ChevronLeft, ChevronRight, Menu, Languages, X, Archive
+  BarChart3, Tag, ChevronLeft, ChevronRight, Menu, Languages, X, Archive, FileCheck2,
+  Building2, CalendarClock, WalletCards, HandCoins, ScrollText, Send, ShieldAlert
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { notifApi } from '../../services/api'
 import { useTranslation } from 'react-i18next'
 import toast from 'react-hot-toast'
+import { initializePushNotifications } from '../../services/pushNotifications'
+import OfflineStatus from '../common/OfflineStatus'
 
 const NAV = {
   user: [
     { to: '/dashboard', icon: LayoutDashboard, key: 'nav.dashboard', exact: true },
     { to: '/dashboard/new-request', icon: Plus, key: 'nav.newRequest' },
     { to: '/dashboard/requests', icon: ListOrdered, key: 'nav.myRequests' },
+    { to: '/dashboard/recurring', icon: CalendarClock, key: 'nav.recurring' },
+    { to: '/dashboard/business-contracts', icon: Building2, key: 'nav.businessContracts' },
     { to: '/dashboard/archived', icon: Archive, key: 'nav.archived' },
     { to: '/dashboard/payments', icon: CreditCard, key: 'nav.payments' },
     { to: '/dashboard/complaints', icon: MessageSquare, key: 'nav.complaints' },
+    { to: '/dashboard/become-collector', icon: Truck, key: 'nav.becomeCollector' },
     { to: '/dashboard/notifications', icon: Bell, key: 'nav.notifications', badge: true },
     { to: '/dashboard/profile', icon: Settings, key: 'nav.profile' },
   ],
   collector: [
     { to: '/collector', icon: LayoutDashboard, key: 'nav.dashboard', exact: true },
+    { to: '/dashboard', icon: ListOrdered, key: 'nav.userSpace' },
     { to: '/collector/tasks', icon: Truck, key: 'nav.tasks' },
+    { to: '/collector/wallet', icon: WalletCards, key: 'nav.wallet' },
+    { to: '/collector/complaints', icon: MessageSquare, key: 'nav.complaints' },
+    { to: '/collector/verification', icon: ShieldAlert, key: 'nav.collectorVerification' },
     { to: '/collector/notifications', icon: Bell, key: 'nav.notifications', badge: true },
     { to: '/collector/profile', icon: Settings, key: 'nav.profile' },
   ],
   admin: [
     { to: '/admin', icon: LayoutDashboard, key: 'nav.dashboard', exact: true },
     { to: '/admin/users', icon: Users, key: 'nav.users' },
+    { to: '/admin/collector-applications', icon: FileCheck2, key: 'nav.collectorApplications' },
+    { to: '/admin/business-contracts', icon: Building2, key: 'nav.businessContracts' },
     { to: '/admin/requests', icon: ListOrdered, key: 'nav.collections' },
     { to: '/admin/categories', icon: Tag, key: 'nav.categories' },
     { to: '/admin/complaints', icon: MessageSquare, key: 'nav.complaints' },
     { to: '/admin/reports', icon: BarChart3, key: 'nav.reports' },
+    { to: '/admin/withdrawals', icon: HandCoins, key: 'nav.withdrawals' },
+    { to: '/admin/audit-logs', icon: ScrollText, key: 'nav.auditLogs' },
+    { to: '/admin/fraud-alerts', icon: ShieldAlert, key: 'nav.fraudAlerts' },
+    { to: '/admin/notification-deliveries', icon: Send, key: 'nav.notificationDeliveries' },
     { to: '/admin/notifications', icon: Bell, key: 'nav.notifications', badge: true },
     { to: '/admin/profile', icon: Settings, key: 'nav.profile' },
   ],
@@ -191,6 +207,13 @@ export default function DashboardLayout({ role }) {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      initializePushNotifications().catch(() => {})
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [])
+
   const handleLogout = useCallback(() => {
     logout()
     toast.success(t('nav.logout') + ' 👋')
@@ -200,7 +223,15 @@ export default function DashboardLayout({ role }) {
   const handleCloseMobile = useCallback(() => setMobileOpen(false), [])
   const handleToggleCollapsed = useCallback(() => setCollapsed(c => !c), [])
 
-  const navItems = NAV[role] || []
+  const navItems = useMemo(() => {
+    const items = NAV[role] || []
+    if (role !== 'user' || user?.role !== 'collector') return items
+    return items.map((item) => (
+      item.key === 'nav.becomeCollector'
+        ? { to: '/collector', icon: Truck, key: 'nav.collectorSpace' }
+        : item
+    ))
+  }, [role, user?.role])
 
   const initials = useMemo(
     () => user?.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U',
@@ -247,6 +278,8 @@ export default function DashboardLayout({ role }) {
             <Menu size={20} />
           </button>
           <div className="flex-1" />
+
+          <OfflineStatus />
 
 
           <LangToggle />

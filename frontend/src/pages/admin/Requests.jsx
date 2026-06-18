@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Search, UserPlus, CheckCircle, XCircle } from 'lucide-react'
+import { Search, UserPlus, CheckCircle, XCircle, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
 import { adminApi, requestApi } from '../../services/api'
 import { PageHeader, StatusBadge, PageLoader, EmptyState, Modal, Pagination } from '../../components/common'
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
+import { createOperationId } from '../../services/offlineQueue'
+import AdminStepUpModal from '../../components/common/AdminStepUpModal'
 
 export default function AdminRequests() {
   const { t, i18n } = useTranslation()
@@ -18,6 +20,10 @@ export default function AdminRequests() {
   const [collectors, setCollectors] = useState([])
   const [assignModal, setAssignModal] = useState(null)
   const [selectedCollector, setSelectedCollector] = useState('')
+  const [refundModal, setRefundModal] = useState(null)
+  const [refundReason, setRefundReason] = useState('')
+  const [refunding, setRefunding] = useState(false)
+  const [refundStepUp, setRefundStepUp] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const LIMIT = 15
@@ -70,6 +76,39 @@ export default function AdminRequests() {
       loadData()
     } catch (err) {
       toast.error(err.response?.data?.message || t('common.serverError'))
+    }
+  }
+
+  const requestRefundConfirmation = () => {
+    if (refundReason.trim().length < 5) {
+      return toast.error(isEn ? 'A detailed reason is required' : 'Un motif détaillé est obligatoire')
+    }
+    setRefundStepUp(true)
+  }
+
+  const handleRefund = async (stepUpToken) => {
+    if (refundReason.trim().length < 5) {
+      return toast.error(isEn ? 'A detailed reason is required' : 'Un motif détaillé est obligatoire')
+    }
+    setRefunding(true)
+    try {
+      await adminApi.refundPayment(
+        refundModal.payment_uuid,
+        { reason: refundReason.trim() },
+        createOperationId(),
+        stepUpToken
+      )
+      toast.success(isEn
+        ? 'Refund initiated. Provider confirmation pending.'
+        : 'Remboursement initié. Confirmation du fournisseur en attente.')
+      setRefundModal(null)
+      setRefundReason('')
+      setRefundStepUp(false)
+      loadData()
+    } catch (error) {
+      toast.error(error.response?.data?.message || t('common.serverError'))
+    } finally {
+      setRefunding(false)
     }
   }
 
@@ -148,6 +187,14 @@ export default function AdminRequests() {
                             <UserPlus size={13} /> {isEn ? 'Assign' : 'Assigner'}
                           </button>
                         )}
+                        {r.payment_status === 'completed' && r.payment_uuid && (
+                          <button
+                            onClick={() => setRefundModal(r)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 text-orange-700 rounded-lg text-xs font-semibold hover:bg-orange-100 transition-all"
+                          >
+                            <RotateCcw size={13} /> {isEn ? 'Refund' : 'Rembourser'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -177,6 +224,48 @@ export default function AdminRequests() {
           </div>
         </div>
       </Modal>
+
+      <Modal
+        isOpen={!!refundModal}
+        onClose={() => setRefundModal(null)}
+        title={isEn ? 'Refund payment' : 'Rembourser le paiement'}
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-gray-500">
+            {isEn
+              ? 'The full amount will be refunded after provider confirmation.'
+              : 'Le montant total sera remboursé après confirmation du fournisseur.'}
+          </p>
+          <textarea
+            className="input min-h-[100px] resize-none"
+            value={refundReason}
+            onChange={(event) => setRefundReason(event.target.value)}
+            placeholder={isEn ? 'Refund reason...' : 'Motif du remboursement...'}
+          />
+          <div className="flex gap-3">
+            <button
+              onClick={() => setRefundModal(null)}
+              className="btn-ghost flex-1 justify-center border border-gray-200"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              onClick={requestRefundConfirmation}
+              disabled={refunding}
+              className="btn-primary flex-1 justify-center"
+            >
+              {refunding ? (isEn ? 'Processing...' : 'Traitement...') : t('common.confirm')}
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <AdminStepUpModal
+        isOpen={refundStepUp}
+        onClose={() => setRefundStepUp(false)}
+        scope="payment_refund"
+        title={isEn ? 'Confirm refund' : 'Confirmer le remboursement'}
+        onVerified={handleRefund}
+      />
     </div>
   )
 }

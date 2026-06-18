@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Link, useNavigate } from 'react-router-dom'
-import { Leaf, Eye, EyeOff, LogIn } from 'lucide-react'
+import { Copy, Eye, EyeOff, Leaf, LogIn, ShieldCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
 import { authApi } from '../../services/api'
@@ -15,6 +15,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [unverified, setUnverified] = useState(false)
   const [resending, setResending] = useState(false)
+  const [security, setSecurity] = useState(null)
+  const [securityCode, setSecurityCode] = useState('')
+  const [backupCodes, setBackupCodes] = useState([])
   const { login } = useAuth()
   const navigate = useNavigate()
 
@@ -25,16 +28,71 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const { data } = await authApi.login(form)
-      flushSync(() => { login(data.data.token, data.data.user) })
-      toast.success(t('auth.login.success'))
-      const role = data.data.user.role
-      navigate(role === 'admin' ? '/admin' : role === 'collector' ? '/collector' : '/dashboard', { replace: true })
+      if (data.code === 'ADMIN_2FA_REQUIRED') {
+        setSecurity({
+          mode: 'verify',
+          challengeToken: data.data.challenge_token,
+        })
+        return
+      }
+      if (data.code === 'ADMIN_2FA_SETUP_REQUIRED') {
+        const setup = await authApi.startAdminTwoFactorSetup(data.data.challenge_token)
+        setSecurity({
+          mode: 'setup',
+          challengeToken: data.data.challenge_token,
+          secret: setup.data.data.secret,
+          provisioningUri: setup.data.data.provisioning_uri,
+        })
+        return
+      }
+      completeLogin(data.data)
     } catch (err) {
       if (err.response?.data?.code === 'EMAIL_NOT_VERIFIED') {
         setUnverified(true)
+      } else if (!err.response) {
+        toast.error('Serveur inaccessible. Vérifiez votre connexion puis réessayez.')
       } else {
         toast.error(err.response?.data?.message || t('common.serverError'))
       }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const completeLogin = (sessionData) => {
+    flushSync(() => { login(sessionData.token, sessionData.user) })
+    toast.success(t('auth.login.success'))
+    const role = sessionData.user.role
+    navigate(role === 'admin' ? '/admin' : role === 'collector' ? '/collector' : '/dashboard', { replace: true })
+  }
+
+  const submitSecurityCode = async (event) => {
+    event.preventDefault()
+    const validCode = security?.mode === 'verify'
+      ? (/^\d{6}$/.test(securityCode) || /^[A-F0-9]{10}$/i.test(securityCode))
+      : /^\d{6}$/.test(securityCode)
+    if (!validCode) {
+      return toast.error('Entrez un code d authentification valide')
+    }
+    setLoading(true)
+    try {
+      const response = security.mode === 'setup'
+        ? await authApi.confirmAdminTwoFactorSetup({
+            challenge_token: security.challengeToken,
+            code: securityCode,
+          })
+        : await authApi.verifyAdminTwoFactor({
+            challenge_token: security.challengeToken,
+            code: securityCode,
+          })
+      if (response.data.data.backup_codes?.length) {
+        setBackupCodes(response.data.data.backup_codes)
+        setSecurity({ mode: 'backup', sessionData: response.data.data })
+      } else {
+        completeLogin(response.data.data)
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || t('common.serverError'))
     } finally {
       setLoading(false)
     }
@@ -91,10 +149,18 @@ export default function LoginPage() {
           </Link>
 
           <div className="bg-white rounded-3xl shadow-green-lg p-8">
-            <h1 className="text-2xl font-display font-bold mb-1">{t('auth.login.title')}</h1>
+            <h1 className="text-2xl font-display font-bold mb-1">
+              {security ? 'Sécurité administrateur' : t('auth.login.title')}
+            </h1>
             <p className="text-sm text-gray-400 mb-8">
-              {t('auth.login.noAccount')}{' '}
-              <Link to="/register" className="text-[#1A8A3C] font-semibold hover:underline">{t('auth.login.register')}</Link>
+              {security
+                ? 'La double authentification protège les opérations sensibles.'
+                : (
+                  <>
+                    {t('auth.login.noAccount')}{' '}
+                    <Link to="/register" className="text-[#1A8A3C] font-semibold hover:underline">{t('auth.login.register')}</Link>
+                  </>
+                )}
             </p>
 
 
@@ -109,7 +175,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-5">
+            {!security && <form onSubmit={handleSubmit} className="space-y-5">
               <div>
                 <label className="label">{t('auth.login.email')}</label>
                 <input type="email" className="input" placeholder={t('auth.login.emailPlaceholder')}
@@ -135,7 +201,93 @@ export default function LoginPage() {
                 {loading ? <Spinner size="sm" /> : <LogIn size={16} />}
                 {loading ? t('auth.login.submitting') : t('auth.login.submit')}
               </button>
-            </form>
+            </form>}
+
+            {security?.mode === 'setup' && (
+              <form onSubmit={submitSecurityCode} className="space-y-5">
+                <div className="rounded-xl border border-[#b9e4c8] bg-[#E8F5EE] p-4 text-sm">
+                  <p className="font-semibold text-[#146c31] flex items-center gap-2">
+                    <ShieldCheck size={18} /> Activez votre application Authenticator
+                  </p>
+                  <p className="text-gray-600 mt-2">
+                    Ajoutez manuellement cette clé dans Google Authenticator ou Microsoft Authenticator.
+                  </p>
+                  <div className="mt-3 flex items-center gap-2 rounded-lg bg-white p-3 font-mono text-xs break-all">
+                    <span className="flex-1">{security.secret}</span>
+                    <button type="button" onClick={() => navigator.clipboard.writeText(security.secret)}>
+                      <Copy size={15} />
+                    </button>
+                  </div>
+                  <a
+                    href={security.provisioningUri}
+                    className="inline-flex mt-3 text-[#1A8A3C] font-semibold hover:underline"
+                  >
+                    Ouvrir dans l application Authenticator
+                  </a>
+                </div>
+                <div>
+                  <label className="label">Code à 6 chiffres</label>
+                  <input
+                    inputMode="numeric"
+                    className="input text-center tracking-[0.4em] font-mono"
+                    value={securityCode}
+                    onChange={(event) => setSecurityCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="000000"
+                    autoFocus
+                  />
+                </div>
+                <button disabled={loading} className="btn-primary w-full justify-center">
+                  {loading ? <Spinner size="sm" /> : <ShieldCheck size={16} />}
+                  Activer et continuer
+                </button>
+              </form>
+            )}
+
+            {security?.mode === 'verify' && (
+              <form onSubmit={submitSecurityCode} className="space-y-5">
+                <div>
+                  <label className="label">Code Authenticator ou code de secours</label>
+                  <input
+                    className="input text-center tracking-[0.35em] font-mono"
+                    value={securityCode}
+                    onChange={(event) => setSecurityCode(event.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10))}
+                    placeholder="000000"
+                    autoFocus
+                  />
+                </div>
+                <button disabled={loading} className="btn-primary w-full justify-center">
+                  {loading ? <Spinner size="sm" /> : <ShieldCheck size={16} />}
+                  Vérifier
+                </button>
+              </form>
+            )}
+
+            {security?.mode === 'backup' && (
+              <div className="space-y-5">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  Enregistrez ces codes de secours dans un endroit sûr. Chacun ne peut être utilisé qu’une fois.
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {backupCodes.map((code) => (
+                    <code key={code} className="rounded-lg bg-gray-100 p-2 text-center text-xs">{code}</code>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn-outline w-full justify-center"
+                  onClick={() => navigator.clipboard.writeText(backupCodes.join('\n'))}
+                >
+                  <Copy size={16} /> Copier les codes
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary w-full justify-center"
+                  onClick={() => completeLogin(security.sessionData)}
+                >
+                  Continuer vers l administration
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

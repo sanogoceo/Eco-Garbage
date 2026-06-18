@@ -11,7 +11,7 @@ services:
     region: frankfurt        # change to oregon / ohio / singapore if closer to you
     rootDir: Eco-Garbage/backend
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: npm run start:production
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -19,14 +19,47 @@ services:
         value: production
       - key: JWT_EXPIRES_IN
         value: 7d
+      - key: ADMIN_2FA_REQUIRED
+        value: "true"
       - key: UPLOAD_DIR
         value: uploads
       - key: MAX_FILE_SIZE
         value: "5242880"
+      - key: PICKUP_PROOF_DIR
+        value: uploads/pickup-proofs
+      - key: PLATFORM_COMMISSION_RATE
+        value: "15"
+      - key: NOTIFICATION_MAX_ATTEMPTS
+        value: "4"
+      - key: NOTIFICATION_RETRY_INTERVAL_SECONDS
+        value: "30"
+      - key: MONGO_MAX_POOL_SIZE
+        value: "20"
+      - key: MONGO_MIN_POOL_SIZE
+        value: "2"
+      - key: MONITORING_METRIC_SAMPLE_RATE
+        value: "0.1"
+      - key: API_RATE_LIMIT_PER_MINUTE
+        value: "600"
+      - key: GPS_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      - key: CHAT_WRITE_RATE_LIMIT_PER_MINUTE
+        value: "30"
+      - key: SOCKET_CONNECTION_RATE_LIMIT_PER_MINUTE
+        value: "30"
+      # Keep disabled unless this service has MongoDB Database Tools and a
+      # persistent encrypted backup volume. Atlas backups are preferred on
+      # ephemeral Render instances.
+      - key: BACKUP_ENABLED
+        value: "false"
       # Secrets — set in Render dashboard after first deploy
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET
+        sync: false
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_BASE64
         sync: false
       - key: FRONTEND_URL
         sync: false        # e.g. https://eco-garbage.vercel.app
@@ -39,4 +72,8 @@ services:
       - key: MAIL_PASS
         sync: false
       - key: MAIL_FROM
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false        # cloudinary://api_key:api_secret@cloud_name
+      - key: BACKUP_ENCRYPTION_KEY
         sync: false

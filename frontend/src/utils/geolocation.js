@@ -52,7 +52,9 @@ export const getCurrentPosition = (options = {}) => {
             break
         }
 
-        reject(new Error(errorMessage))
+        const geolocationError = new Error(errorMessage)
+        geolocationError.code = error.code
+        reject(geolocationError)
       },
       { ...defaultOptions, ...options }
     )
@@ -92,7 +94,9 @@ export const watchPosition = (callback, errorCallback, options = {}) => {
           break
       }
 
-      errorCallback(new Error(errorMessage))
+      const geolocationError = new Error(errorMessage)
+      geolocationError.code = error.code
+      errorCallback(geolocationError)
     },
     { ...defaultOptions, ...options }
   )

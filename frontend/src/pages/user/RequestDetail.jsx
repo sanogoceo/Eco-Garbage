@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, X, Star, ShieldCheck, User, Archive } from 'lucide-react'
+import { ArrowLeft, X, Star, ShieldCheck, Archive, KeyRound, Camera, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
 import { requestApi, ratingApi } from '../../services/api'
-import { StatusBadge, PageLoader, ConfirmDialog, Modal } from '../../components/common'
+import { StatusBadge, PageLoader, Modal } from '../../components/common'
 import LiveRouteMap from '../../components/common/LiveRouteMap'
+import RequestChat from '../../components/common/RequestChat'
+import { subscribeToRequest } from '../../services/realtime'
+import AuthenticatedProofImage from '../../components/common/AuthenticatedProofImage'
+import AuthenticatedCollectorPhoto from '../../components/common/AuthenticatedCollectorPhoto'
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
+import { getServiceTypeLabel } from '../../utils/serviceTypes'
 
 export default function RequestDetail() {
   const { t, i18n } = useTranslation()
@@ -22,6 +27,9 @@ export default function RequestDetail() {
   const [score, setScore] = useState(5)
   const [comment, setComment] = useState('')
   const [archiving, setArchiving] = useState(false)
+  const [completionCode, setCompletionCode] = useState(null)
+  const [codeLoading, setCodeLoading] = useState(false)
+  const [cancelForm, setCancelForm] = useState({ reason: 'changed_mind', details: '' })
 
   const TIMELINE = [
     { status: 'pending',     label: isEn ? 'Received'  : 'Reçue',      icon: '📨' },
@@ -46,6 +54,11 @@ export default function RequestDetail() {
 
   useEffect(() => { fetchReq() }, [uuid])
 
+  useEffect(() => subscribeToRequest(uuid, {
+    location_updated: (payload) => setReq((current) => current ? { ...current, ...payload } : current),
+    status_updated: () => fetchReq(),
+  }), [uuid])
+
   useEffect(() => {
     if (!req) return
     if (!['on_way', 'in_progress'].includes(req.status)) return
@@ -53,10 +66,26 @@ export default function RequestDetail() {
     return () => clearInterval(timer)
   }, [req?.status])
 
+  useEffect(() => {
+    if (req?.status !== 'in_progress') {
+      setCompletionCode(null)
+      return
+    }
+    setCodeLoading(true)
+    requestApi.completionCode(uuid)
+      .then((response) => setCompletionCode(response.data.data))
+      .catch(() => setCompletionCode(null))
+      .finally(() => setCodeLoading(false))
+  }, [req?.status, uuid])
+
   const handleCancel = async () => {
     try {
-      await requestApi.cancel(uuid)
+      const response = await requestApi.cancel(uuid, cancelForm)
       toast.success(t('user.requests.cancelSuccess'))
+      if (response.data.data?.cancellation_fee) {
+        toast(`Frais d'annulation: ${response.data.data.cancellation_fee.toLocaleString()} FCFA`)
+      }
+      setCancelDialog(false)
       fetchReq()
     } catch (err) {
       toast.error(err.response?.data?.message || t('common.serverError'))
@@ -99,12 +128,57 @@ export default function RequestDetail() {
 
   const details = [
     [isEn ? 'Waste type'      : 'Type de déchet',  req.category_name],
-    [isEn ? 'Service type'    : 'Type de service',  req.service_type],
+    [isEn ? 'Service type'    : 'Type de service',  getServiceTypeLabel(req.service_type, isEn)],
     [isEn ? 'Address'         : 'Adresse',           req.address],
+    ...(req.address_details ? [
+      [isEn ? 'City' : 'Ville', req.address_details.city || '—'],
+      [isEn ? 'District' : 'Quartier', req.address_details.district || '—'],
+      [isEn ? 'Landmark' : 'Repère', req.address_details.landmark || '—'],
+    ] : []),
     [isEn ? 'Quantity'        : 'Quantité',          req.quantity_number ? `${req.quantity_number} ${isEn ? 'unit(s)' : 'unité(s)'}` : req.quantity_estimate || '—'],
     [isEn ? 'Distance'        : 'Distance',          req.distance_km ? `${req.distance_km} km` : '—'],
     [isEn ? 'Estimated price' : 'Prix estimé',       req.estimated_price ? `${parseFloat(req.estimated_price).toLocaleString()} FCFA` : '—'],
     [isEn ? 'Final price'     : 'Prix final',        req.final_price ? `${parseFloat(req.final_price).toLocaleString()} FCFA` : '—'],
+    ...(req.scheduled_at ? [[
+      isEn ? 'Scheduled slot' : 'Créneau réservé',
+      format(new Date(req.scheduled_at), 'dd MMM yyyy HH:mm', { locale: dateLocale }),
+    ]] : []),
+    ...(req.pricing ? [
+      [
+        isEn ? 'Base and quantity' : 'Base et quantité',
+        `${Number(req.pricing.base_subtotal || 0).toLocaleString()} FCFA`,
+      ],
+      [
+        isEn ? 'Distance fee' : 'Frais de distance',
+        `${Number(req.pricing.distance_fee || 0).toLocaleString()} FCFA`,
+      ],
+      [
+        isEn ? 'Service adjustment' : 'Ajustement du service',
+        `x${req.pricing.service_multiplier || 1}`,
+      ],
+      [
+        isEn ? 'Service fixed fee' : 'Frais fixes du service',
+        `${Number(req.pricing.service_fee || 0).toLocaleString()} FCFA`,
+      ],
+      [
+        isEn ? 'Zone adjustment' : 'Ajustement de zone',
+        req.pricing.zone_label
+          ? `${req.pricing.zone_label} (x${req.pricing.zone_multiplier || 1})`
+          : `x${req.pricing.zone_multiplier || 1}`,
+      ],
+      [
+        isEn ? 'Zone fee' : 'Frais de zone',
+        `${Number(req.pricing.zone_fee || 0).toLocaleString()} FCFA`,
+      ],
+    ] : []),
+    ...(req.business_details ? [
+      [isEn ? 'Company' : 'Entreprise', req.business_details.company_name],
+      ['RCCM', req.business_details.registration_number],
+      ['NIU', req.business_details.tax_id || '—'],
+      [isEn ? 'Billing email' : 'Email de facturation', req.business_details.billing_email],
+      [isEn ? 'Billing address' : 'Adresse de facturation', req.business_details.billing_address],
+      [isEn ? 'Company contact' : 'Contact entreprise', req.business_details.contact_name],
+    ] : []),
     [isEn ? 'Created on'      : 'Créée le',          format(new Date(req.created_at), 'dd MMM yyyy HH:mm', { locale: dateLocale })],
     [isEn ? 'Collector'       : 'Collecteur',        req.collector_name || (isEn ? 'Not assigned' : 'Non assigné')],
     [isEn ? 'Collector phone' : 'Tél. collecteur',   req.collector_phone || '—'],
@@ -160,6 +234,11 @@ export default function RequestDetail() {
               ? 'Updates every 10 seconds while the collector is on the way.'
               : 'Mise à jour toutes les 10 secondes pendant le trajet du collecteur.'}
           </p>
+          {req.eta_minutes && (
+            <div className="mt-3 rounded-xl bg-[#E8F5EE] p-3 text-sm text-[#1A8A3C] font-semibold">
+              Arrivee estimee dans {req.eta_minutes} min · {req.remaining_distance_km} km restants
+            </div>
+          )}
         </div>
       )}
 
@@ -173,9 +252,11 @@ export default function RequestDetail() {
           </div>
           <div className="flex items-center gap-4">
             <div className="w-20 h-20 rounded-xl overflow-hidden bg-[#E8F5EE] flex-shrink-0 flex items-center justify-center border-2 border-[#1A8A3C]">
-              {req.collector_avatar_url
-                ? <img src={req.collector_avatar_url} alt={req.collector_name} className="w-full h-full object-cover" />
-                : <User size={32} className="text-[#1A8A3C]" />}
+              <AuthenticatedCollectorPhoto
+                requestUuid={uuid}
+                collectorName={req.collector_name}
+                className="w-full h-full"
+              />
             </div>
             <div className="flex-1">
               <p className="font-bold text-gray-900 text-lg">{req.collector_name}</p>
@@ -190,9 +271,36 @@ export default function RequestDetail() {
                   ? 'Please verify this photo matches the person coming to your home.'
                   : 'Vérifiez que cette photo correspond à la personne venant à votre domicile.'}</p>
               </div>
+              {!req.collector_photo_available && (
+                <p className="mt-2 text-xs font-semibold text-orange-700">
+                  {isEn
+                    ? 'Verified photo unavailable. Do not share the completion code before checking the collector.'
+                    : 'Photo validee indisponible. Ne communiquez pas le code avant de verifier le collecteur.'}
+                </p>
+              )}
             </div>
           </div>
         </div>
+      )}
+
+      {req?.status === 'in_progress' && codeLoading && (
+        <div className="card p-5 mb-5 border-2 border-orange-200 bg-orange-50 flex items-center justify-center gap-2 text-orange-700 text-sm font-medium">
+          <Loader2 size={18} className="spinner" />
+          {isEn ? 'Loading confirmation code...' : 'Chargement du code de confirmation...'}
+        </div>
+      )}
+
+      {completionCode?.code && !codeLoading && (
+        <div className="card p-5 mb-5 border-2 border-orange-200 bg-orange-50 text-center">
+          <KeyRound size={22} className="mx-auto text-orange-600 mb-2" />
+          <p className="text-sm font-semibold text-orange-800">Code de confirmation de fin</p>
+          <p className="text-3xl tracking-[0.35em] font-bold text-orange-700 my-2">{completionCode.code}</p>
+          <p className="text-xs text-orange-700">Donnez ce code au collecteur seulement apres avoir verifie le travail.</p>
+        </div>
+      )}
+
+      {req.collector_id && !['cancelled', 'failed'].includes(req.status) && (
+        <RequestChat requestUuid={uuid} />
       )}
 
       <div className="card p-6 mb-5">
@@ -212,6 +320,26 @@ export default function RequestDetail() {
           </div>
         )}
       </div>
+
+      {req.proofs?.length > 0 && (
+        <div className="card p-5 mb-5">
+          <h3 className="font-display font-bold flex items-center gap-2 mb-3">
+            <Camera size={18} className="text-[#1A8A3C]" /> Preuves de collecte
+          </h3>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {req.proofs.map((proof) => (
+              <div key={proof._id} className="rounded-xl border border-gray-200 overflow-hidden">
+                <AuthenticatedProofImage requestUuid={uuid} proof={proof} className="w-full h-36" />
+                <div className="p-3">
+                  <p className="font-semibold text-sm">{proof.type === 'before' ? 'Photo avant' : 'Photo apres'}</p>
+                  <p className="text-xs text-gray-400 mt-1">{new Date(proof.captured_at).toLocaleString()}</p>
+                  <p className="text-xs text-gray-400">{proof.location?.latitude?.toFixed(5)}, {proof.location?.longitude?.toFixed(5)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {req.status === 'completed' && (
         <div className={`rounded-2xl p-4 mb-5 flex items-center justify-between ${req.payment_status === 'completed' ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'}`}>
@@ -261,15 +389,39 @@ export default function RequestDetail() {
             <Archive size={16} /> {archiving ? (isEn ? 'Archiving...' : 'Archivage...') : (isEn ? 'Archive' : 'Archiver')}
           </button>
         )}
-        <Link to="/dashboard/complaints" className="btn-ghost flex-1 justify-center border border-gray-200">
+        <Link to={`/dashboard/complaints?request=${uuid}`} className="btn-ghost flex-1 justify-center border border-gray-200">
           💬 {isEn ? 'Report a problem' : 'Signaler un problème'}
         </Link>
       </div>
 
-      <ConfirmDialog isOpen={cancelDialog} onClose={() => setCancelDialog(false)} onConfirm={handleCancel}
-        title={isEn ? 'Cancel request' : 'Annuler la demande'}
-        message={isEn ? 'Are you sure you want to cancel this request? This action is irreversible.' : 'Êtes-vous sûr de vouloir annuler cette demande ? Cette action est irréversible.'}
-        confirmLabel={isEn ? 'Yes, cancel' : 'Oui, annuler'} danger />
+      <Modal isOpen={cancelDialog} onClose={() => setCancelDialog(false)} title="Annuler la collecte" size="sm">
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-gray-500">
+            {req.cancellation_fee_estimate > 0
+              ? `Frais prevus: ${Number(req.cancellation_fee_estimate).toLocaleString()} FCFA.`
+              : 'Cette annulation est actuellement sans frais.'}
+          </p>
+          <div>
+            <label className="label">Motif</label>
+            <select className="input" value={cancelForm.reason}
+              onChange={(event) => setCancelForm({ ...cancelForm, reason: event.target.value })}>
+              <option value="changed_mind">J'ai change d'avis</option>
+              <option value="duplicate">Demande en double</option>
+              <option value="collector_delay">Retard du collecteur</option>
+              <option value="price">Prix trop eleve</option>
+              <option value="address_error">Erreur d'adresse</option>
+              <option value="other">Autre</option>
+            </select>
+          </div>
+          <textarea className="input" maxLength={500} placeholder="Details optionnels"
+            value={cancelForm.details}
+            onChange={(event) => setCancelForm({ ...cancelForm, details: event.target.value })} />
+          <div className="flex gap-3">
+            <button onClick={() => setCancelDialog(false)} className="btn-ghost flex-1 justify-center border border-gray-200">Retour</button>
+            <button onClick={handleCancel} className="flex-1 rounded-xl bg-red-500 text-white font-semibold">Confirmer</button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal isOpen={ratingModal} onClose={() => setRatingModal(false)} title={isEn ? 'Rate the collector' : 'Évaluer le collecteur'}>
         <div className="flex flex-col gap-4">

@@ -10,16 +10,33 @@ function applyTheme(theme) {
   }
 }
 
+function safeLocalStorageGet(key, fallback = null) {
+  try {
+    return localStorage.getItem(key);
+  } catch (error) {
+    console.warn('localStorage get failed', key, error);
+    return fallback;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn('localStorage set failed', key, error);
+  }
+}
+
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('eco_theme') || 'light';
+    const saved = safeLocalStorageGet('eco_theme', 'light') || 'light';
     applyTheme(saved);
     return saved;
   });
 
   useEffect(() => {
     applyTheme(theme);
-    localStorage.setItem('eco_theme', theme);
+    safeLocalStorageSet('eco_theme', theme);
   }, [theme]);
 
   const toggleTheme = useCallback(() => {

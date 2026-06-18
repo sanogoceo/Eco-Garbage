@@ -55,8 +55,13 @@
   .badge-completed  { @apply badge bg-green-100 text-green-700; }
   .badge-cancelled  { @apply badge bg-red-100 text-red-700; }
   .badge-failed     { @apply badge bg-gray-100 text-gray-600; }
+  .badge-processing { @apply badge bg-blue-100 text-blue-700; }
+  .badge-refund_pending { @apply badge bg-orange-100 text-orange-700; }
+  .badge-refunded   { @apply badge bg-purple-100 text-purple-700; }
   .badge-open       { @apply badge bg-yellow-100 text-yellow-700; }
   .badge-in_review  { @apply badge bg-blue-100 text-blue-700; }
+  .badge-awaiting_user { @apply badge bg-amber-100 text-amber-700; }
+  .badge-awaiting_collector { @apply badge bg-purple-100 text-purple-700; }
   .badge-resolved   { @apply badge bg-green-100 text-green-700; }
   .badge-closed     { @apply badge bg-gray-100 text-gray-600; }
 

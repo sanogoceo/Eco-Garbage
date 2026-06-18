@@ -4,7 +4,8 @@ import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { adminApi } from '../../services/api'
-import { PageHeader, PageLoader, EmptyState, ConfirmDialog, Modal } from '../../components/common'
+import { PageHeader, PageLoader, EmptyState, ConfirmDialog, Modal, Pagination } from '../../components/common'
+import AdminStepUpModal from '../../components/common/AdminStepUpModal'
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
 import { isValidCmPhone, formatCmPhone, normalizeCmPhone } from '../../utils/phone'
@@ -21,31 +22,47 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const LIMIT = 15
   const [confirmDialog, setConfirmDialog] = useState(null)
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [createModal, setCreateModal] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [stepUpTarget, setStepUpTarget] = useState(null)
 
   const ROLE_LABELS = { user: t('roles.user'), collector: t('roles.collector'), admin: t('roles.admin') }
 
   const fetchUsers = async (params = {}) => {
     setLoading(true)
     try {
-      const { data } = await adminApi.users({ ...params, limit: 50 })
+      const { data } = await adminApi.users({ ...params, limit: LIMIT })
       setUsers(data.data || [])
+      setTotal(data.pagination?.total || 0)
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { fetchUsers({ role: roleFilter, search }) }, [roleFilter, search])
+  useEffect(() => { setPage(1); fetchUsers({ role: roleFilter, search, page: 1 }) }, [roleFilter])
+  useEffect(() => {
+    const t = setTimeout(() => { setPage(1); fetchUsers({ role: roleFilter, search, page: 1 }) }, 400)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const handleToggle = async () => {
-    if (!confirmDialog) return
+  const handlePageChange = (p) => { setPage(p); fetchUsers({ role: roleFilter, search, page: p }) }
+
+  const handleToggle = async (stepUpToken) => {
+    if (!stepUpTarget) return
     try {
-      await adminApi.toggleUser(confirmDialog.userId, { is_active: !confirmDialog.is_active })
+      await adminApi.toggleUser(
+        stepUpTarget.userId,
+        { is_active: !stepUpTarget.is_active },
+        stepUpToken
+      )
       toast.success(t('admin.users.statusSuccess'))
+      setStepUpTarget(null)
       fetchUsers({ role: roleFilter, search })
     } catch (err) {
       toast.error(err.response?.data?.message || t('common.serverError'))
@@ -85,7 +102,7 @@ export default function AdminUsers() {
 
   return (
     <div className="fade-up">
-      <PageHeader title={t('admin.users.title')} subtitle={`${users.length} ${t('admin.users.title').toLowerCase()}`}
+      <PageHeader title={t('admin.users.title')} subtitle={`${total} ${t('admin.users.title').toLowerCase()}`}
         action={<button onClick={() => { setForm(EMPTY_FORM); setCreateModal(true) }} className="btn-primary"><Plus size={16} />{t('common.create')}</button>} />
 
       <div className="flex flex-wrap gap-3 mb-6">
@@ -150,6 +167,7 @@ export default function AdminUsers() {
                               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#E8F5EE] text-[#1A8A3C] hover:bg-[#C8EDDA] transition-all"
                               title={i18n.language?.startsWith('en') ? 'View profile' : 'Voir le profil'}>
                               <Eye size={13} />
+                              {i18n.language?.startsWith('en') ? 'File' : 'Dossier'}
                             </button>
                           )}
                           <button
@@ -177,14 +195,24 @@ export default function AdminUsers() {
         </div>
       )}
 
+      <Pagination page={page} total={total} limit={LIMIT} onChange={handlePageChange} />
+
       <ConfirmDialog
         isOpen={!!confirmDialog}
         onClose={() => setConfirmDialog(null)}
-        onConfirm={handleToggle}
+        onConfirm={() => setStepUpTarget(confirmDialog)}
         title={confirmDialog?.is_active ? (i18n.language?.startsWith('en') ? 'Suspend account' : 'Suspendre le compte') : (i18n.language?.startsWith('en') ? 'Activate account' : 'Activer le compte')}
         message={`${i18n.language?.startsWith('en') ? 'Are you sure you want to' : 'Êtes-vous sûr de vouloir'} ${confirmDialog?.is_active ? (i18n.language?.startsWith('en') ? 'suspend' : 'suspendre') : (i18n.language?.startsWith('en') ? 'activate' : 'activer')} ${i18n.language?.startsWith('en') ? 'the account of' : 'le compte de'} ${confirmDialog?.name} ?`}
         confirmLabel={confirmDialog?.is_active ? t('admin.users.suspend') : t('admin.users.activate')}
         danger={confirmDialog?.is_active}
+      />
+
+      <AdminStepUpModal
+        isOpen={!!stepUpTarget}
+        onClose={() => setStepUpTarget(null)}
+        scope="user_status"
+        title={i18n.language?.startsWith('en') ? 'Confirm account status change' : 'Confirmer le changement du compte'}
+        onVerified={handleToggle}
       />
 
       <ConfirmDialog
@@ -218,7 +246,6 @@ export default function AdminUsers() {
             <label className="label">{t('admin.users.role')} *</label>
             <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
               <option value="user">{t('roles.user')}</option>
-              <option value="collector">{t('roles.collector')}</option>
               <option value="admin">{t('roles.admin')}</option>
             </select>
           </div>

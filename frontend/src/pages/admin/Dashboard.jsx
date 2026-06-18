@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Users, Truck, CheckCircle, DollarSign, Clock, MessageSquare, ArrowRight, BarChart3 } from 'lucide-react'
+import {
+  Users, Truck, CheckCircle, DollarSign, Clock, MessageSquare, ArrowRight,
+  BarChart3, AlertTriangle, MapPin, Radio, Timer,
+} from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { adminApi } from '../../services/api'
@@ -15,27 +18,38 @@ export default function AdminDashboard() {
   const [error, setError] = useState(false)
   const dateLocale = i18n.language?.startsWith('en') ? enUS : fr
 
-  useEffect(() => {
+  const loadDashboard = (silent = false) => {
+    if (!silent) setLoading(true)
     adminApi.dashboard()
-      .then(r => setData(r.data.data))
-      .catch(() => setError(true))
-      .finally(() => setLoading(false))
+      .then(r => { setData(r.data.data); setError(false) })
+      .catch(() => { if (!silent) setError(true) })
+      .finally(() => { if (!silent) setLoading(false) })
+  }
+
+  useEffect(() => {
+    loadDashboard()
+    const id = setInterval(() => loadDashboard(true), 30000)
+    return () => clearInterval(id)
   }, [])
 
   if (loading) return <PageLoader />
   if (error || !data) return (
     <div className="flex flex-col items-center justify-center py-24 gap-4">
       <p className="text-gray-500">{t('common.serverError')}</p>
-      <button className="btn-primary" onClick={() => {
-        setLoading(true); setError(false)
-        adminApi.dashboard().then(r => setData(r.data.data)).catch(() => setError(true)).finally(() => setLoading(false))
-      }}>
+      <button className="btn-primary" onClick={() => loadDashboard()}>
         {t('common.retry')}
       </button>
     </div>
   )
 
-  const { stats, recentRequests, topCollectors } = data
+  const {
+    stats,
+    recentRequests,
+    topCollectors,
+    statusBreakdown = [],
+    activeOperations = [],
+    operationalAlerts = [],
+  } = data
   const ad = t('admin.dashboard', { returnObjects: true })
 
   const quickLinks = [
@@ -73,6 +87,107 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-2 gap-4 mb-8">
         <StatCard icon={MessageSquare} label={ad.openComplaints}  value={stats.openComplaints} color="red" />
         <StatCard icon={BarChart3}     label={ad.completionRate}  value={stats.totalRequests > 0 ? `${Math.round((stats.completedRequests / stats.totalRequests) * 100)}%` : '0%'} color="blue" />
+      </div>
+
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-display font-bold">Supervision opérationnelle</h2>
+            <p className="text-sm text-gray-400">État du service et alertes terrain en temps réel</p>
+          </div>
+          <Link to="/admin/requests" className="text-sm text-[#1A8A3C] font-semibold flex items-center gap-1 hover:underline">
+            Gérer les collectes <ArrowRight size={14} />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
+          <StatCard icon={Radio} label="Missions actives" value={stats.activeRequests || 0} color="blue" />
+          <StatCard icon={AlertTriangle} label="Collectes en retard" value={stats.delayedRequests || 0} color="red" />
+          <StatCard icon={Truck} label="Collecteurs disponibles" value={stats.availableCollectors || 0} color="green" />
+          <StatCard
+            icon={Timer}
+            label="Durée moyenne"
+            value={stats.averageCompletionMinutes ? `${stats.averageCompletionMinutes} min` : '—'}
+            color="purple"
+          />
+        </div>
+
+        {operationalAlerts.length > 0 && (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            {operationalAlerts.map((alert) => (
+              <Link
+                key={`${alert.level}-${alert.label}`}
+                to={alert.target}
+                className={`rounded-2xl border p-4 text-sm font-semibold flex items-start gap-2 transition-transform hover:-translate-y-0.5 ${
+                  alert.level === 'critical'
+                    ? 'border-red-200 bg-red-50 text-red-700'
+                    : alert.level === 'warning'
+                      ? 'border-amber-200 bg-amber-50 text-amber-700'
+                      : 'border-blue-200 bg-blue-50 text-blue-700'
+                }`}
+              >
+                <AlertTriangle size={17} className="mt-0.5 flex-shrink-0" />
+                {alert.label}
+              </Link>
+            ))}
+          </div>
+        )}
+
+        <div className="grid lg:grid-cols-3 gap-5">
+          <div className="lg:col-span-2 card p-5">
+            <h3 className="font-display font-bold mb-4">Collectes à surveiller</h3>
+            <div className="flex flex-col gap-2">
+              {activeOperations.length === 0 ? (
+                <p className="text-sm text-gray-400 py-6 text-center">Aucune mission active</p>
+              ) : activeOperations.slice(0, 8).map((operation) => (
+                <Link
+                  key={operation.uuid}
+                  to="/admin/requests"
+                  className={`flex items-center gap-3 rounded-xl p-3 ${
+                    operation.delayed ? 'bg-red-50 border border-red-100' : 'bg-gray-50'
+                  }`}
+                >
+                  <MapPin size={17} className={operation.delayed ? 'text-red-500' : 'text-[#1A8A3C]'} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">
+                      {operation.category_name || 'Collecte'} · {operation.address}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate">
+                      {operation.collector_name || 'Collecteur non attribué'}
+                      {operation.eta_minutes ? ` · ETA ${operation.eta_minutes} min` : ''}
+                    </p>
+                  </div>
+                  <StatusBadge status={operation.status} />
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="card p-5">
+            <h3 className="font-display font-bold mb-4">Répartition des statuts</h3>
+            <div className="flex flex-col gap-3">
+              {statusBreakdown.map((item) => {
+                const percentage = stats.totalRequests
+                  ? Math.round((item.count / stats.totalRequests) * 100)
+                  : 0
+                return (
+                  <div key={item.status}>
+                    <div className="flex justify-between text-xs mb-1.5">
+                      <span className="font-medium capitalize">{t(`status.${item.status}`)}</span>
+                      <span className="text-gray-400">{item.count} · {percentage}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-[#1A8A3C]"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">

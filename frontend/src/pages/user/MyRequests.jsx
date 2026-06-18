@@ -8,6 +8,7 @@ import { PageHeader, StatusBadge, PageLoader, EmptyState, Pagination } from '../
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
 import getCategoryIcon from '../../utils/categoryIcons'
+import { getServiceTypeLabel } from '../../utils/serviceTypes'
 
 export default function MyRequests() {
   const { t, i18n } = useTranslation()
@@ -47,6 +48,10 @@ export default function MyRequests() {
   }
 
   useEffect(() => { setPage(1); fetchRequests(statusFilter, 1) }, [statusFilter])
+  useEffect(() => {
+    const t = setTimeout(() => { setPage(1); fetchRequests(statusFilter, 1) }, 400)
+    return () => clearTimeout(t)
+  }, [search])
 
   const handlePageChange = (p) => { setPage(p); fetchRequests(statusFilter, p) }
 
@@ -134,7 +139,9 @@ export default function MyRequests() {
                       {parseFloat(r.estimated_price).toLocaleString()} FCFA
                     </p>
                   )}
-                  <p className="text-xs text-gray-300 mt-0.5 uppercase tracking-wide">{r.service_type}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {getServiceTypeLabel(r.service_type, isEn)}
+                  </p>
                 </div>
               </Link>
               {['completed', 'cancelled', 'failed'].includes(r.status) && (

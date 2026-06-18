@@ -8,6 +8,7 @@ import { PageHeader, PageLoader, EmptyState, StatusBadge, Pagination } from '../
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
 import getCategoryIcon from '../../utils/categoryIcons'
+import { getServiceTypeLabel } from '../../utils/serviceTypes'
 
 const LIMIT = 10
 
@@ -171,11 +172,19 @@ export default function CollectorTasks() {
                 <div className="flex flex-wrap items-center gap-3 justify-between">
                   <div className="text-sm text-gray-700">
                     <p>{isEn ? 'Estimated price:' : 'Prix estimé :'} <span className="font-semibold text-[#1A8A3C]">{tk.estimated_price ? `${parseFloat(tk.estimated_price).toLocaleString()} FCFA` : '—'}</span></p>
+                    <p>{isEn ? 'Service:' : 'Service :'} {getServiceTypeLabel(tk.service_type, isEn)}</p>
                     <p>{isEn ? 'Created:' : 'Demande créée :'} {format(new Date(tk.created_at), 'dd MMM yyyy HH:mm', { locale: dateLocale })}</p>
+                    {!tk.vehicle_compatible && (
+                      <p className="text-red-600 font-semibold mt-1">
+                        {isEn
+                          ? 'Vehicle not compatible with this pickup'
+                          : 'Vehicule non compatible avec cette collecte'}
+                      </p>
+                    )}
                   </div>
                   <button
                     onClick={() => handleAccept(tk.uuid)}
-                    disabled={accepting}
+                    disabled={accepting || !tk.vehicle_compatible}
                     className="btn-primary flex items-center gap-2 px-4 py-3 rounded-xl bg-[#1A8A3C] text-white hover:bg-[#16632c] disabled:opacity-60">
                     <CheckCircle2 size={18} />
                     {accepting ? (isEn ? 'Accepting...' : 'Acceptation...') : (isEn ? 'Accept' : 'Accepter')}

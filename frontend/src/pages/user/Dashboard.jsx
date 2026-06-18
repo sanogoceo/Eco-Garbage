@@ -19,12 +19,21 @@ export default function UserDashboard() {
   const dateLocale = isEn ? enUS : fr
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       requestApi.list({ limit: 5 }),
       paymentApi.list(),
-    ]).then(([r, p]) => {
-      setRequests(r.data.data || [])
-      setPayments(p.data.data || [])
+    ]).then((results) => {
+      const [requestsResult, paymentsResult] = results
+      if (requestsResult.status === 'fulfilled') {
+        setRequests(requestsResult.value.data.data || [])
+      } else {
+        console.warn('Failed to load user requests', requestsResult.reason)
+      }
+      if (paymentsResult.status === 'fulfilled') {
+        setPayments(paymentsResult.value.data.data || [])
+      } else {
+        console.warn('Failed to load payment history', paymentsResult.reason)
+      }
     }).finally(() => setLoading(false))
   }, [])
 

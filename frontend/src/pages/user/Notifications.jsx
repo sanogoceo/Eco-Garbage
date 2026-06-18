@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Bell, CheckCheck } from 'lucide-react'
+import { Bell, BellRing, CheckCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
 import { notifApi } from '../../services/api'
 import { PageHeader, PageLoader, EmptyState } from '../../components/common'
 import { format } from 'date-fns'
 import { fr, enUS } from 'date-fns/locale'
+import { initializePushNotifications } from '../../services/pushNotifications'
 
 export default function Notifications() {
   const { t, i18n } = useTranslation()
   const dateLocale = i18n.language?.startsWith('en') ? enUS : fr
   const [notifs, setNotifs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [pushEnabled, setPushEnabled] = useState(
+    typeof Notification !== 'undefined' && Notification.permission === 'granted'
+  )
 
   const loadData = () => {
     notifApi.list().then(r => setNotifs(r.data.data || [])).finally(() => setLoading(false))
@@ -26,6 +30,17 @@ export default function Notifications() {
 
   const unreadCount = notifs.filter(n => !n.is_read).length
 
+  const enablePush = async () => {
+    try {
+      const token = await initializePushNotifications({ requestPermission: true })
+      if (!token) return toast.error('Notifications refusees ou Firebase non configure')
+      setPushEnabled(true)
+      toast.success('Notifications push activees')
+    } catch {
+      toast.error('Impossible d activer les notifications push')
+    }
+  }
+
   return (
     <div className="fade-up max-w-2xl mx-auto">
       <PageHeader
@@ -37,6 +52,15 @@ export default function Notifications() {
           </button>
         )}
       />
+      {!pushEnabled && (
+        <button onClick={enablePush} className="card p-4 mb-4 w-full flex items-center gap-3 text-left border-2 border-[#C8EDDA]">
+          <BellRing className="text-[#1A8A3C]" />
+          <span>
+            <span className="block font-semibold">Activer les notifications push</span>
+            <span className="block text-xs text-gray-400">Recevez les changements de statut meme hors de l application.</span>
+          </span>
+        </button>
+      )}
       {loading ? <PageLoader /> : notifs.length === 0 ? (
         <EmptyState
           icon={Bell}

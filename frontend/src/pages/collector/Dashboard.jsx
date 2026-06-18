@@ -20,14 +20,26 @@ export default function CollectorDashboard() {
   const [loading, setLoading] = useState(true)
   const [toggling, setToggling] = useState(false)
   const locationIntervalRef = useRef(null)
+  const isMountedRef = useRef(true)
 
-  const sendLocation = () => {
-    if (!navigator.geolocation) return
-    navigator.geolocation.getCurrentPosition(
-      (pos) => collectorApi.updateLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }).catch(() => {}),
-      () => {},
-      { enableHighAccuracy: true, timeout: 10000 }
-    )
+  const getCurrentPosition = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject(new Error('Geolocation non disponible'))
+    }
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    })
+  })
+
+  const sendLocation = async () => {
+    try {
+      const pos = await getCurrentPosition()
+      await collectorApi.updateLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+    } catch (error) {
+      console.warn('GPS update failed:', error)
+    }
   }
 
   const startLocationTracking = () => {
@@ -42,14 +54,33 @@ export default function CollectorDashboard() {
   }
 
   useEffect(() => {
-    Promise.all([collectorApi.stats(), collectorApi.tasks({ limit: 5 })]).then(([s, tk]) => {
-      setStats(s.data.data)
-      setTasks(tk.data.data || [])
-      const isAvail = s.data.data?.profile?.is_available || false
-      setAvailable(isAvail)
-      if (isAvail) startLocationTracking()
-    }).finally(() => setLoading(false))
-    return () => stopLocationTracking()
+    isMountedRef.current = true
+    Promise.allSettled([collectorApi.stats(), collectorApi.tasks({ limit: 5 })])
+      .then((results) => {
+        if (!isMountedRef.current) return
+        const [statsResult, tasksResult] = results
+        if (statsResult.status === 'fulfilled') {
+          setStats(statsResult.value.data.data)
+          const isAvail = statsResult.value.data.data?.profile?.is_available || false
+          setAvailable(isAvail)
+          if (isAvail) startLocationTracking()
+        } else {
+          console.warn('Failed to load collector stats', statsResult.reason)
+        }
+        if (tasksResult.status === 'fulfilled') {
+          setTasks(tasksResult.value.data.data || [])
+        } else {
+          console.warn('Failed to load collector tasks', tasksResult.reason)
+        }
+      })
+      .finally(() => {
+        if (isMountedRef.current) setLoading(false)
+      })
+
+    return () => {
+      isMountedRef.current = false
+      stopLocationTracking()
+    }
   }, [])
 
   const toggleAvailability = async () => {
@@ -57,20 +88,33 @@ export default function CollectorDashboard() {
     try {
       const newState = !available
       if (newState && navigator.geolocation) {
-        await new Promise(resolve => {
-          navigator.geolocation.getCurrentPosition(
-            async (pos) => { await collectorApi.updateLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }); resolve() },
-            () => resolve(),
-            { enableHighAccuracy: true, timeout: 10000 }
-          )
-        })
+        try {
+          const pos = await getCurrentPosition()
+          await collectorApi.updateLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        } catch (error) {
+          console.warn('Collecteur GPS error:', error)
+          if (error.code === 1) {
+            toast.error('Autorisation localisation refusée. Vérifiez les permissions du navigateur.')
+          } else if (error.code === 3) {
+            toast.error('La localisation a dépassé le délai. Réessayez.')
+          } else {
+            toast.error('Impossible de récupérer votre position, activation en cours.')
+          }
+        }
       }
-      await collectorApi.setAvailability({ is_available: newState })
+
+      const response = await collectorApi.setAvailability({ is_available: newState })
       setAvailable(newState)
-      if (newState) { startLocationTracking(); toast.success(t('collector.dashboard.available') + ' 📍') }
-      else { stopLocationTracking(); toast.success(t('collector.dashboard.unavailable')) }
-    } catch {
-      toast.error(t('common.serverError'))
+      if (newState) {
+        startLocationTracking()
+        toast.success(response.data?.message || (t('collector.dashboard.available') + ' 📍'))
+      } else {
+        stopLocationTracking()
+        toast.success(response.data?.message || t('collector.dashboard.unavailable'))
+      }
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || err.message || t('common.serverError')
+      toast.error(errorMsg)
     } finally {
       setToggling(false)
     }
