@@ -88,6 +88,8 @@
       "forgotPassword": "Forgot?",
       "submit": "Sign in",
       "submitting": "Signing in...",
+      "serverWaking": "Server is starting...",
+      "serverWakingHint": "The server is waking up, which can take up to a minute. Please keep this page open.",
       "success": "Successfully signed in!",
       "fillFields": "Please fill in all fields",
       "unverifiedTitle": "Email not verified",

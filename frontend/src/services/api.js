@@ -147,6 +147,20 @@ api.interceptors.response.use(
 
 export default api;
 
+export const waitForServer = async ({ timeoutMs = 90000, intervalMs = 3000 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const { data } = await axios.get(`${API_BASE}/categories`, { timeout: 10000 });
+      if (data?.success) return true;
+    } catch {
+      // The server is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+};
+
 
 export const authApi = {
   register: (data) => api.post('/auth/register', data, {
