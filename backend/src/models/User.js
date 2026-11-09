@@ -79,6 +79,9 @@ const userSchema = new mongoose.Schema({
     pending_totp_expires: Date,
     backup_code_hashes: { type: [String], default: [], select: false },
     enabled_at: Date,
+    last_totp_step: Number,
+    failed_code_attempts: { type: Number, default: 0 },
+    code_locked_until: Date,
   },
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const AuthSession = require('../models/AuthSession');
 const AdminActionGrant = require('../models/AdminActionGrant');
+const { isAdminTwoFactorRequired } = require('../services/adminSecurityService');
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -36,6 +37,9 @@ const authMiddleware = async (req, res, next) => {
     }
     if (!user.is_verified) {
       return res.status(403).json({ success: false, message: 'Email non verifie' });
+    }
+    if (user.role === 'admin' && isAdminTwoFactorRequired() && !session.mfa_verified) {
+      return res.status(401).json({ success: false, message: 'Double authentification requise' });
     }
 
     req.user = {

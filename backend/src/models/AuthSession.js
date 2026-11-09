@@ -13,6 +13,7 @@ const authSessionSchema = new mongoose.Schema({
   },
   user_agent: String,
   is_unusual: { type: Boolean, default: false },
+  mfa_verified: { type: Boolean, default: false },
   last_seen_at: { type: Date, default: Date.now },
   expires_at: { type: Date, required: true },
   revoked_at: Date,
