@@ -36,6 +36,11 @@ const validatePhone = (phone) => {
 };
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const UNKNOWN_ACCOUNT_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
+const RESEND_VERIFICATION_RESPONSE = {
+  success: true,
+  message: 'Si ce compte attend une verification, un email vient d etre envoye.',
+};
 
 const generateToken = (user, sessionId) =>
   jwt.sign(
@@ -220,20 +225,17 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password)
       return res.status(400).json({ success: false, message: 'Email et mot de passe requis' });
 
     const userDoc = await User.findOne({ email: email.toLowerCase() });
-    if (!userDoc)
+    const valid = await bcrypt.compare(password, userDoc?.password_hash || UNKNOWN_ACCOUNT_HASH);
+    if (!userDoc || !valid)
       return res.status(401).json({ success: false, message: 'Email ou mot de passe incorrect' });
     if (!userDoc.is_active)
       return res.status(403).json({ success: false, message: 'Compte suspendu. Contactez le support.' });
     if (!userDoc.is_verified)
       return res.status(403).json({ success: false, message: 'Veuillez verifier votre email avant de vous connecter.', code: 'EMAIL_NOT_VERIFIED' });
-
-    const valid = await bcrypt.compare(password, userDoc.password_hash);
-    if (!valid)
-      return res.status(401).json({ success: false, message: 'Email ou mot de passe incorrect' });
 
     const twoFactorEnabled = Boolean(userDoc.admin_security?.two_factor_enabled);
     if (userDoc.role === 'admin' && (twoFactorEnabled || isAdminTwoFactorRequired())) {
@@ -341,13 +343,10 @@ const verifyEmail = async (req, res) => {
 const resendVerification = async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: 'Email requis' });
+    if (typeof email !== 'string' || !email) return res.status(400).json({ success: false, message: 'Email requis' });
 
     const userDoc = await User.findOne({ email: email.toLowerCase() });
-    if (!userDoc)
-      return res.status(404).json({ success: false, message: 'Aucun compte associe a cet email' });
-    if (userDoc.is_verified)
-      return res.status(400).json({ success: false, message: 'Cet email est deja verifie' });
+    if (!userDoc || userDoc.is_verified) return res.json(RESEND_VERIFICATION_RESPONSE);
 
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -360,10 +359,9 @@ const resendVerification = async (req, res) => {
       await sendVerificationEmail(userDoc.email, userDoc.name, verificationToken);
     } catch (mailErr) {
       console.error('Resend verification email error:', mailErr);
-      return res.status(500).json({ success: false, message: 'Erreur lors de l\'envoi de l\'email' });
     }
 
-    res.json({ success: true, message: 'Email de verification renvoye. Verifiez votre boite mail.' });
+    res.json(RESEND_VERIFICATION_RESPONSE);
   } catch (err) {
     console.error('resendVerification error:', err);
     res.status(500).json({ success: false, message: 'Erreur serveur' });
@@ -490,7 +488,10 @@ const revokeOtherSessions = async (req, res) => {
 const createAdminStepUp = async (req, res) => {
   try {
     const { scope, password, code } = req.body;
-    const validScopes = ['collector_review', 'user_status', 'payment_refund', 'service_configuration', 'business_contract_review'];
+    const validScopes = [
+      'collector_review', 'user_status', 'payment_refund', 'service_configuration', 'business_contract_review',
+      'user_management', 'complaint_decision', 'withdrawal_review',
+    ];
     if (!scope || !validScopes.includes(scope))
       return res.status(400).json({ success: false, message: 'Scope invalide' });
     if (!password)
@@ -656,4 +657,5 @@ module.exports = {
   createAdminStepUp,
   startTwoFactorSetup, confirmTwoFactorSetup, verifyTwoFactorLogin,
   enrollTwoFactor, enableTwoFactor, disableTwoFactor,
+  validatePassword,
 };

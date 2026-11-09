@@ -12,6 +12,7 @@ const {
   chatWriteLimiter,
   expensiveOperationLimiter,
   gpsLimiter,
+  loginAccountLimiter,
   notificationLimiter,
   requestReadLimiter,
   webhookLimiter,
@@ -98,7 +99,7 @@ const adminStepUpLimiter = rateLimit({
 
 
 router.post('/auth/register', authLimiter, auth.register);
-router.post('/auth/login', authLimiter, auth.login);
+router.post('/auth/login', authLimiter, loginAccountLimiter, auth.login);
 router.post('/auth/admin/2fa/setup', authLimiter, auth.startTwoFactorSetup);
 router.post('/auth/admin/2fa/confirm', authLimiter, auth.confirmTwoFactorSetup);
 router.post('/auth/admin/2fa/verify', authLimiter, auth.verifyTwoFactorLogin);
@@ -217,16 +218,16 @@ router.get('/admin/collector-applications/:uuid/documents/:type', authMiddleware
 router.get('/admin/users', authMiddleware, requireRole('admin'), admin.getUsers);
 router.get('/admin/collectors/:id', authMiddleware, requireRole('admin'), sensitiveReadLimiter, admin.getCollectorDetails);
 router.put('/admin/collectors/:id/hazardous-certification', authMiddleware, requireRole('admin'), requireAdminStepUp('collector_review'), admin.updateHazardousCertification);
-router.post('/admin/users', authMiddleware, requireRole('admin'), admin.createUser);
+router.post('/admin/users', authMiddleware, requireRole('admin'), requireAdminStepUp('user_management'), admin.createUser);
 router.put('/admin/users/:id/status', authMiddleware, requireRole('admin'), requireAdminStepUp('user_status'), admin.toggleUserStatus);
-router.delete('/admin/users/:id', authMiddleware, requireRole('admin'), admin.deleteUser);
+router.delete('/admin/users/:id', authMiddleware, requireRole('admin'), requireAdminStepUp('user_management'), admin.deleteUser);
 router.get('/admin/complaints', authMiddleware, requireRole('admin'), complaints.getAdminComplaints);
 router.put('/admin/complaints/:uuid/review', authMiddleware, requireRole('admin'), complaints.updateReviewStatus);
-router.put('/admin/complaints/:uuid/decision', authMiddleware, requireRole('admin'), sensitiveActionLimiter, complaints.decideComplaint);
-router.put('/admin/complaints/:uuid', authMiddleware, requireRole('admin'), complaints.decideComplaint);
+router.put('/admin/complaints/:uuid/decision', authMiddleware, requireRole('admin'), requireAdminStepUp('complaint_decision'), sensitiveActionLimiter, complaints.decideComplaint);
+router.put('/admin/complaints/:uuid', authMiddleware, requireRole('admin'), requireAdminStepUp('complaint_decision'), complaints.decideComplaint);
 router.get('/admin/reports', authMiddleware, requireRole('admin'), admin.getReports);
 router.get('/admin/withdrawals', authMiddleware, requireRole('admin'), wallet.getWithdrawals);
-router.put('/admin/withdrawals/:uuid', authMiddleware, requireRole('admin'), wallet.reviewWithdrawal);
+router.put('/admin/withdrawals/:uuid', authMiddleware, requireRole('admin'), requireAdminStepUp('withdrawal_review'), wallet.reviewWithdrawal);
 router.post('/admin/payments/:uuid/refund', authMiddleware, requireRole('admin'), requireAdminStepUp('payment_refund'), sensitiveActionLimiter, payments.requestRefund);
 router.get('/admin/categories', authMiddleware, requireRole('admin'), admin.getCategories);
 router.post('/admin/categories', authMiddleware, requireRole('admin'), admin.createCategory);

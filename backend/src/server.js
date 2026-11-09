@@ -71,7 +71,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({
-  limit: '10mb',
+  limit: '256kb',
   verify: (req, res, buffer) => {
     if (req.originalUrl === '/api/payments/webhook') {
       req.rawBody = Buffer.from(buffer);
@@ -110,6 +110,9 @@ app.use((err, req, res, next) => {
         ? 'Chaque image doit faire moins de 5 Mo.'
         : 'Fichiers invalides ou trop nombreux.',
     });
+  }
+  if (err?.status >= 400 && err.status < 500) {
+    return res.status(err.status).json({ success: false, message: 'Requete invalide ou trop volumineuse' });
   }
   res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
 });

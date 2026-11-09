@@ -36,7 +36,10 @@ const {
   SCHEDULED_SERVICE_TYPES,
   validateServiceRequest,
 } = require('../utils/serviceTypes');
-const { hasValidHazardousCertification } = require('../utils/collectorCertification');
+const {
+  hasValidHazardousCertification,
+  isCollectorVerified,
+} = require('../utils/collectorCertification');
 const { normalizeAddress, validateStructuredAddress } = require('../utils/address');
 const {
   applyContractPricing,
@@ -511,12 +514,24 @@ const updateStatus = async (req, res) => {
     }
 
     if (req.user.role === 'collector' && status === 'assigned' && !request.collector_id) {
+      if (request.user_id.toString() === req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Vous ne pouvez pas accepter votre propre demande',
+        });
+      }
       const [collector, category] = await Promise.all([
         User.findById(req.user.id)
-          .select('collector_profile.vehicle_type collector_profile.hazardous_certification')
+          .select('collector_profile.vehicle_type collector_profile.hazardous_certification collector_profile.verification_status collector_profile.verification_expires_at')
           .lean(),
         WasteCategory.findById(request.category_id).select('is_hazardous').lean(),
       ]);
+      if (!isCollectorVerified(collector)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Votre verification collecteur est absente ou expiree',
+        });
+      }
       if (!isVehicleCompatible({
         vehicleType: collector?.collector_profile?.vehicle_type || 'foot',
         quantity: request.quantity_number,

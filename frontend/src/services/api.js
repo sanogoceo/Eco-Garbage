@@ -328,13 +328,20 @@ export const adminApi = {
     { headers: { 'X-Eco-Step-Up': stepUpToken } }
   ),
   users: (params) => api.get('/admin/users', { params }),
-  createUser: (data) => api.post('/admin/users', data),
+  createUser: (data, stepUpToken) => api.post(
+    '/admin/users',
+    data,
+    { headers: { 'X-Eco-Step-Up': stepUpToken } }
+  ),
   toggleUser: (id, data, stepUpToken) => api.put(
     `/admin/users/${id}/status`,
     data,
     { headers: { 'X-Eco-Step-Up': stepUpToken } }
   ),
-  deleteUser: (id) => api.delete(`/admin/users/${id}`),
+  deleteUser: (id, stepUpToken) => api.delete(
+    `/admin/users/${id}`,
+    { headers: { 'X-Eco-Step-Up': stepUpToken } }
+  ),
   getCollectorDetails: (id) => api.get(`/admin/collectors/${id}`),
   updateHazardousCertification: (id, data, stepUpToken) => api.put(
     `/admin/collectors/${id}/hazardous-certification`,
@@ -343,8 +350,16 @@ export const adminApi = {
   ),
   complaints: (params) => api.get('/admin/complaints', { params }),
   reviewComplaint: (uuid, data) => api.put(`/admin/complaints/${uuid}/review`, data),
-  decideComplaint: (uuid, data) => api.put(`/admin/complaints/${uuid}/decision`, data),
-  respondComplaint: (uuid, data) => api.put(`/admin/complaints/${uuid}`, data),
+  decideComplaint: (uuid, data, stepUpToken) => api.put(
+    `/admin/complaints/${uuid}/decision`,
+    data,
+    { headers: { 'X-Eco-Step-Up': stepUpToken } }
+  ),
+  respondComplaint: (uuid, data, stepUpToken) => api.put(
+    `/admin/complaints/${uuid}`,
+    data,
+    { headers: { 'X-Eco-Step-Up': stepUpToken } }
+  ),
   reports: (params) => api.get('/admin/reports', { params }),
   categories: () => api.get('/admin/categories'),
   createCategory: (data) => api.post('/admin/categories', data),
@@ -388,7 +403,11 @@ export const adminApi = {
   ),
   requests: (params) => api.get('/admin/requests', { params }),
   withdrawals: (params) => api.get('/admin/withdrawals', { params }),
-  reviewWithdrawal: (uuid, data) => api.put(`/admin/withdrawals/${uuid}`, data),
+  reviewWithdrawal: (uuid, data, stepUpToken) => api.put(
+    `/admin/withdrawals/${uuid}`,
+    data,
+    { headers: { 'X-Eco-Step-Up': stepUpToken } }
+  ),
   refundPayment: (uuid, data, idempotencyKey, stepUpToken) => api.post(
     `/admin/payments/${uuid}/refund`,
     data,
