@@ -6,7 +6,7 @@ const User = require('../models/User');
 const AuthSession = require('../models/AuthSession');
 const AdminActionGrant = require('../models/AdminActionGrant');
 const Notification = require('../models/Notification');
-const { sendVerificationEmail, sendResetPasswordEmail } = require('../services/emailService');
+const { isEmailConfigured, sendVerificationEmail, sendResetPasswordEmail } = require('../services/emailService');
 
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 const CM_PHONE_REGEX = /^(\+?237)?[62]\d{8}$/;
@@ -58,6 +58,15 @@ const createSession = async (userId, req) => {
   return sessionId;
 };
 
+const revokeUserSessions = (userId, reason, exceptSessionUuid) => AuthSession.updateMany(
+  {
+    user_id: userId,
+    revoked_at: null,
+    ...(exceptSessionUuid ? { uuid: { $ne: exceptSessionUuid } } : {}),
+  },
+  { $set: { revoked_at: new Date(), revocation_reason: reason } }
+);
+
 
 const register = async (req, res) => {
   try {
@@ -91,7 +100,7 @@ const register = async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const uuid = uuidv4();
-    const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER);
+    const requireVerification = isEmailConfigured() || process.env.NODE_ENV === 'production';
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
 
@@ -107,9 +116,9 @@ const register = async (req, res) => {
 
     const userData = {
       uuid, name, email, phone: phone || undefined, password_hash: hash, role,
-      is_verified: !smtpConfigured, // auto-verify when SMTP not configured
-      email_verification_token: smtpConfigured ? verificationToken : null,
-      email_verification_expires: smtpConfigured ? verificationExpires : null,
+      is_verified: !requireVerification,
+      email_verification_token: requireVerification ? verificationToken : null,
+      email_verification_expires: requireVerification ? verificationExpires : null,
     };
     if (role === 'collector') {
       userData.collector_profile = {
@@ -130,13 +139,13 @@ const register = async (req, res) => {
     await Notification.create({
       user_id: userDoc._id,
       title: 'Bienvenue sur EcoGarbage !',
-      message: smtpConfigured
+      message: requireVerification
         ? `Bonjour ${name}, votre compte a ete cree avec succes. Verifiez votre email pour activer votre compte.`
         : `Bonjour ${name}, bienvenue sur EcoGarbage ! Votre compte est actif.`,
       type: 'welcome',
     });
 
-    if (smtpConfigured) {
+    if (requireVerification) {
       try {
         await sendVerificationEmail(email, name, verificationToken);
       } catch (mailErr) {
@@ -220,6 +229,7 @@ const changePassword = async (req, res) => {
     if (pwError) return res.status(400).json({ success: false, message: pwError });
     const hash = await bcrypt.hash(newPassword, 10);
     await User.findByIdAndUpdate(req.user.id, { $set: { password_hash: hash } });
+    await revokeUserSessions(req.user.id, 'password_changed', req.session.uuid);
     res.json({ success: true, message: 'Mot de passe modifie' });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
@@ -230,7 +240,7 @@ const changePassword = async (req, res) => {
 const verifyEmail = async (req, res) => {
   try {
     const { token } = req.query;
-    if (!token) return res.status(400).json({ success: false, message: 'Token manquant' });
+    if (!token || typeof token !== 'string') return res.status(400).json({ success: false, message: 'Token manquant' });
 
     const userDoc = await User.findOne({
       email_verification_token: token,
@@ -319,7 +329,9 @@ const forgotPassword = async (req, res) => {
 const resetPassword = async (req, res) => {
   try {
     const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ success: false, message: 'Token et mot de passe requis' });
+    if (typeof token !== 'string' || !token || typeof password !== 'string' || !password) {
+      return res.status(400).json({ success: false, message: 'Token et mot de passe requis' });
+    }
 
     const pwError = validatePassword(password);
     if (pwError) return res.status(400).json({ success: false, message: pwError });
@@ -336,6 +348,7 @@ const resetPassword = async (req, res) => {
     userDoc.password_reset_token = null;
     userDoc.password_reset_expires = null;
     await userDoc.save();
+    await revokeUserSessions(userDoc._id, 'password_reset');
 
     res.json({ success: true, message: 'Mot de passe reinitialise avec succes. Vous pouvez maintenant vous connecter.' });
   } catch (err) {

@@ -35,6 +35,7 @@ const {
 const { startBackupScheduler } = require('./services/backupService');
 const { monitoringMiddleware } = require('./middleware/monitoring');
 const { globalApiLimiter } = require('./middleware/rateLimits');
+const { rejectMongoOperators } = require('./middleware/rejectMongoOperators');
 const {
   startHealthMonitoringScheduler,
 } = require('./services/monitoringService');
@@ -81,7 +82,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(monitoringMiddleware);
 
-app.use('/api', globalApiLimiter, routes);
+app.use('/api', globalApiLimiter, rejectMongoOperators, routes);
 
 app.get('/health', (req, res) => {
   const databaseConnected = mongoose.connection.readyState === 1;

@@ -18,6 +18,11 @@ const escapeHtml = (value) => String(value || '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;');
 
+const getFrontendBaseUrl = () => String(process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')[0]
+  .trim()
+  .replace(/\/+$/, '');
+
 const isEmailConfigured = () => Boolean(
   process.env.MAIL_HOST
   && process.env.MAIL_USER
@@ -31,10 +36,7 @@ const sendNotificationFallbackEmail = async ({
   message,
   targetPath,
 }) => {
-  const baseUrl = String(process.env.FRONTEND_URL || 'http://localhost:5173')
-    .split(',')[0]
-    .trim()
-    .replace(/\/+$/, '');
+  const baseUrl = getFrontendBaseUrl();
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message);
   const safeName = escapeHtml(userName);
@@ -62,8 +64,8 @@ const sendNotificationFallbackEmail = async ({
 };
 
 const sendVerificationEmail = async (toEmail, userName, token) => {
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const link = `${baseUrl}/verify-email?token=${token}`;
+  const link = `${getFrontendBaseUrl()}/verify-email?token=${token}`;
+  const safeName = escapeHtml(userName);
 
   await transporter.sendMail({
     from: `"EcoGarbage" <${process.env.MAIL_FROM || 'no-reply@ecogarbage.app'}>`,
@@ -75,7 +77,7 @@ const sendVerificationEmail = async (toEmail, userName, token) => {
           <span style="font-size:40px;">♻️</span>
           <h2 style="color:#1A8A3C;margin:8px 0 0;">EcoGarbage</h2>
         </div>
-        <h3 style="color:#111;margin-bottom:8px;">Bonjour ${userName} 👋</h3>
+        <h3 style="color:#111;margin-bottom:8px;">Bonjour ${safeName} 👋</h3>
         <p style="color:#555;line-height:1.6;">
           Merci de vous être inscrit sur <strong>EcoGarbage</strong>. Cliquez sur le bouton ci-dessous pour vérifier votre adresse email et activer votre compte.
         </p>
@@ -98,8 +100,8 @@ const sendVerificationEmail = async (toEmail, userName, token) => {
 
 
 const sendResetPasswordEmail = async (toEmail, userName, token) => {
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const link = `${baseUrl}/reset-password?token=${token}`;
+  const link = `${getFrontendBaseUrl()}/reset-password?token=${token}`;
+  const safeName = escapeHtml(userName);
 
   await transporter.sendMail({
     from: `"EcoGarbage" <${process.env.MAIL_FROM || 'no-reply@ecogarbage.app'}>`,
@@ -111,7 +113,7 @@ const sendResetPasswordEmail = async (toEmail, userName, token) => {
           <span style="font-size:40px;">🔒</span>
           <h2 style="color:#1A8A3C;margin:8px 0 0;">EcoGarbage</h2>
         </div>
-        <h3 style="color:#111;margin-bottom:8px;">Bonjour ${userName} 👋</h3>
+        <h3 style="color:#111;margin-bottom:8px;">Bonjour ${safeName} 👋</h3>
         <p style="color:#555;line-height:1.6;">
           Vous avez demandé la réinitialisation de votre mot de passe. Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe.
         </p>

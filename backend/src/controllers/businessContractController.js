@@ -23,9 +23,6 @@ const normalizeSite = (site = {}) => {
     contact_name: String(site.contact_name || '').trim().slice(0, 120),
     contact_phone: String(site.contact_phone || '').trim().slice(0, 30),
     is_active: site.is_active !== false,
-    status: ['pending', 'active', 'suspended', 'rejected'].includes(site.status)
-      ? site.status
-      : 'pending',
   };
 };
 
@@ -56,7 +53,6 @@ const validateContract = (body) => {
     billing_cycle: body.billing_cycle === 'per_collection'
       ? 'per_collection'
       : 'monthly',
-    ...normalizeTerms(body),
     sites: Array.isArray(body.sites) ? body.sites.slice(0, 50).map(normalizeSite) : [],
   };
   const errors = {};
@@ -320,14 +316,25 @@ const updateContract = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Contrat introuvable' });
     }
     if (req.body.status && ['active', 'suspended'].includes(req.body.status)) {
-      if (!['active', 'suspended'].includes(contract.status)) {
+      const canSuspend = req.body.status === 'suspended' && contract.status === 'active';
+      const canResume = req.body.status === 'active'
+        && contract.status === 'suspended'
+        && contract.suspended_by === 'customer';
+      if (!canSuspend && !canResume) {
         return res.status(403).json({
           success: false,
-          message: 'Ce contrat doit d abord etre valide par l administration',
+          message: 'Ce changement de statut releve de l administration',
         });
       }
       contract.status = req.body.status;
+      contract.suspended_by = canSuspend ? 'customer' : undefined;
     } else {
+      if (contract.status !== 'pending') {
+        return res.status(403).json({
+          success: false,
+          message: 'Seul un contrat en attente de validation peut etre modifie',
+        });
+      }
       const validation = validateContract(req.body);
       if (validation.message) {
         return res.status(400).json({
@@ -364,6 +371,7 @@ const reviewAdminContract = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Contrat introuvable' });
     }
     contract.status = decision === 'approved' ? 'active' : decision;
+    contract.suspended_by = decision === 'suspended' ? 'admin' : undefined;
     contract.reviewed_by = req.user.id;
     contract.reviewed_at = new Date();
     contract.review_notes = notes;
