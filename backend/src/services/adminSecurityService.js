@@ -176,7 +176,7 @@ const generateChallengeToken = (user, purpose) => jwt.sign(
 );
 
 const verifyChallengeToken = (token, purpose) => {
-  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
   if (
     decoded.type !== 'admin_2fa_challenge'
     || decoded.role !== 'admin'

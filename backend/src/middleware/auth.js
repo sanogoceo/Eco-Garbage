@@ -12,7 +12,7 @@ const authMiddleware = async (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded.type !== 'access' || !decoded.sid) {
       return res.status(401).json({ success: false, message: 'Session invalide' });
     }
@@ -87,7 +87,7 @@ const requireAdminStepUp = (scope) => async (req, res, next) => {
     });
   }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (
       decoded.type !== 'admin_step_up'
       || decoded.id !== req.user.id

@@ -10,13 +10,14 @@ if (!process.env.JWT_SECRET) {
   console.error('❌ FATAL: JWT_SECRET is not set in environment variables. Exiting.');
   process.exit(1);
 }
-if (process.env.NODE_ENV === 'production' && !process.env.DATA_ENCRYPTION_KEY) {
-  console.error('FATAL: DATA_ENCRYPTION_KEY is required in production. Exiting.');
-  process.exit(1);
-}
-if (process.env.NODE_ENV === 'production' && !process.env.PAYMENT_WEBHOOK_SECRET) {
-  console.error('FATAL: PAYMENT_WEBHOOK_SECRET is required in production. Exiting.');
-  process.exit(1);
+if (process.env.NODE_ENV === 'production') {
+  for (const name of ['JWT_SECRET', 'DATA_ENCRYPTION_KEY', 'PAYMENT_WEBHOOK_SECRET']) {
+    const value = process.env[name] || '';
+    if (value.length < 32 || /replace_me/i.test(value)) {
+      console.error(`FATAL: ${name} must be a random secret of at least 32 characters. Exiting.`);
+      process.exit(1);
+    }
+  }
 }
 
 const connectDB = require('./config/db');
@@ -65,8 +66,9 @@ app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return callback(null, true);
-    return callback(new Error(`CORS: origin ${origin} not allowed`));
+    const corsError = new Error(`CORS: origin ${origin} not allowed`);
+    corsError.status = 403;
+    return callback(corsError);
   },
   credentials: true,
 }));
@@ -79,7 +81,10 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+morgan.token('safe-url', (req) => (req.originalUrl || req.url).replace(/([?&]token=)[^&]*/gi, '$1[REDACTED]'));
+app.use(morgan(process.env.NODE_ENV === 'production'
+  ? ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"'
+  : 'dev'));
 app.use(monitoringMiddleware);
 
 app.use('/api', globalApiLimiter, rejectMongoOperators, routes);

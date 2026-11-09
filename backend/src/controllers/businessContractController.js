@@ -7,6 +7,7 @@ const Payment = require('../models/Payment');
 const AuditLog = require('../models/AuditLog');
 const { normalizeAddress, validateStructuredAddress } = require('../utils/address');
 const { notifyUser } = require('../services/notificationService');
+const escapeRegex = require('../utils/escapeRegex');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -237,10 +238,11 @@ const listAdminContracts = async (req, res) => {
       filter.status = status;
     }
     if (search) {
+      const pattern = escapeRegex(search);
       filter.$or = [
-        { company_name: { $regex: search, $options: 'i' } },
-        { registration_number: { $regex: search, $options: 'i' } },
-        { billing_email: { $regex: search, $options: 'i' } },
+        { company_name: { $regex: pattern, $options: 'i' } },
+        { registration_number: { $regex: pattern, $options: 'i' } },
+        { billing_email: { $regex: pattern, $options: 'i' } },
       ];
     }
     const contracts = await BusinessContract.find(filter)

@@ -92,9 +92,11 @@ const getComplaintForAccess = async (uuid, user) => {
   return complaint;
 };
 
-const serializeComplaint = (complaint) => {
+const serializeComplaint = (complaint, viewer) => {
   const data = complaint.toObject ? complaint.toObject() : complaint;
   const request = data.request_id;
+  const canSeeEmail = viewer?.role === 'admin'
+    || String(data.user_id?._id || data.user_id) === viewer?.id;
   return {
     id: data._id?.toString(),
     uuid: data.uuid,
@@ -111,7 +113,7 @@ const serializeComplaint = (complaint) => {
       ? {
           id: data.user_id._id?.toString(),
           name: data.user_id.name,
-          email: data.user_id.email,
+          email: canSeeEmail ? data.user_id.email : undefined,
           role: data.user_id.role,
         }
       : undefined,
@@ -340,7 +342,7 @@ const getMyComplaints = async (req, res) => {
       })
       .populate('decision.decided_by', 'name')
       .sort({ last_message_at: -1, created_at: -1 });
-    res.json({ success: true, data: complaints.map(serializeComplaint) });
+    res.json({ success: true, data: complaints.map((complaint) => serializeComplaint(complaint, req.user)) });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -352,7 +354,7 @@ const getComplaint = async (req, res) => {
     if (!complaint) {
       return res.status(404).json({ success: false, message: 'Litige introuvable' });
     }
-    res.json({ success: true, data: serializeComplaint(complaint) });
+    res.json({ success: true, data: serializeComplaint(complaint, req.user) });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -474,7 +476,7 @@ const addEvidence = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Preuves ajoutees',
-      data: serializeComplaint(complaint),
+      data: serializeComplaint(complaint, req.user),
     });
   } catch (error) {
     await deleteEvidenceFiles(savedEvidence).catch(() => {});
@@ -552,7 +554,7 @@ const getAdminComplaints = async (req, res) => {
     ]);
     res.json({
       success: true,
-      data: complaints.map(serializeComplaint),
+      data: complaints.map((complaint) => serializeComplaint(complaint, req.user)),
       pagination: { total, page, limit, pages: Math.max(1, Math.ceil(total / limit)) },
     });
   } catch (error) {
@@ -586,7 +588,7 @@ const updateReviewStatus = async (req, res) => {
       message_type: 'status',
     });
     await notifyParticipants(complaint, req.user.id, 'Mise a jour du litige', labels[status]);
-    res.json({ success: true, message: 'Statut mis a jour', data: serializeComplaint(complaint) });
+    res.json({ success: true, message: 'Statut mis a jour', data: serializeComplaint(complaint, req.user) });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -663,7 +665,7 @@ const decideComplaint = async (req, res) => {
     res.json({
       success: true,
       message: 'Decision enregistree',
-      data: serializeComplaint(complaint),
+      data: serializeComplaint(complaint, req.user),
     });
   } catch (error) {
     console.error('decideComplaint error:', error);

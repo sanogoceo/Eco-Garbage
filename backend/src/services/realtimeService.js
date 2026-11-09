@@ -43,8 +43,7 @@ const initializeRealtime = (httpServer, allowedOrigins) => {
   io = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)
-          || /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) {
+        if (!origin || allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
         callback(new Error('Origine Socket.IO interdite'));
@@ -72,7 +71,7 @@ const initializeRealtime = (httpServer, allowedOrigins) => {
         return next(error);
       }
       const token = socket.handshake.auth?.token;
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
       if (decoded.type !== 'access' || !decoded.sid) {
         return next(new Error('Session invalide'));
       }

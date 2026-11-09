@@ -2,8 +2,22 @@ const { v4: uuidv4 } = require('uuid');
 const Wallet = require('../models/Wallet');
 const WalletTransaction = require('../models/WalletTransaction');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
+const CollectorApplication = require('../models/CollectorApplication');
+const User = require('../models/User');
 const { getOrCreateWallet } = require('../services/walletService');
 const { notifyUser } = require('../services/notificationService');
+
+const lastNineDigits = (value) => String(value || '').replace(/\D/g, '').slice(-9);
+
+const getVerifiedPayoutPhone = async (collectorId) => {
+  const application = await CollectorApplication.findOne({
+    user_id: collectorId,
+    status: 'approved',
+  }).select('phone').sort({ reviewed_at: -1, created_at: -1 }).lean();
+  if (application?.phone) return application.phone;
+  const user = await User.findById(collectorId).select('phone').lean();
+  return user?.phone;
+};
 
 const getWallet = async (req, res) => {
   try {
@@ -31,6 +45,13 @@ const requestWithdrawal = async (req, res) => {
     }
     if (!['mtn_momo', 'orange_money'].includes(method) || !/^\+?[0-9]{9,15}$/.test(phone || '')) {
       return res.status(400).json({ success: false, message: 'Methode ou numero de paiement invalide' });
+    }
+    const verifiedPhone = await getVerifiedPayoutPhone(req.user.id);
+    if (!verifiedPhone || lastNineDigits(verifiedPhone) !== lastNineDigits(phone)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Le retrait doit etre envoye au numero verifie de votre dossier collecteur',
+      });
     }
     if (await WithdrawalRequest.exists({
       collector_id: req.user.id,

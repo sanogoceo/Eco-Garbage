@@ -76,6 +76,8 @@ const createSession = async (userId, req) => {
   return sessionId;
 };
 
+const hashResetToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
 const revokeUserSessions = (userId, reason, exceptSessionUuid) => AuthSession.updateMany(
   {
     user_id: userId,
@@ -381,7 +383,7 @@ const forgotPassword = async (req, res) => {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    userDoc.password_reset_token = resetToken;
+    userDoc.password_reset_token = hashResetToken(resetToken);
     userDoc.password_reset_expires = resetExpires;
     await userDoc.save();
 
@@ -410,7 +412,7 @@ const resetPassword = async (req, res) => {
     if (pwError) return res.status(400).json({ success: false, message: pwError });
 
     const userDoc = await User.findOne({
-      password_reset_token: token,
+      password_reset_token: hashResetToken(token),
       password_reset_expires: { $gt: new Date() },
     });
 

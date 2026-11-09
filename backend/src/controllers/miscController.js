@@ -148,6 +148,11 @@ let _categoriesCache = null;
 let _categoriesCachedAt = 0;
 const CATEGORIES_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+const invalidateCategoriesCache = () => {
+  _categoriesCache = null;
+  _categoriesCachedAt = 0;
+};
+
 const getCategories = async (req, res) => {
   try {
     if (_categoriesCache && Date.now() - _categoriesCachedAt < CATEGORIES_TTL_MS) {
@@ -295,6 +300,6 @@ const getCollectorStats = async (req, res) => {
 module.exports = {
   getNotifications, markAllRead,
   createRating, createComplaint, getMyComplaints,
-  getPayments, payRequest, getCategories,
+  getPayments, payRequest, getCategories, invalidateCategoriesCache,
   getCollectorTasks, getAvailableCollectorRequests, updateCollectorAvailability, updateCollectorLocation, getCollectorStats,
 };
