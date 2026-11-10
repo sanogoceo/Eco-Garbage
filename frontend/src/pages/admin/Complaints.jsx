@@ -12,6 +12,7 @@ import {
   EmptyState, Modal, PageHeader, PageLoader, StatusBadge,
 } from '../../components/common'
 import AuthenticatedComplaintImage from '../../components/common/AuthenticatedComplaintImage'
+import AdminStepUpModal from '../../components/common/AdminStepUpModal'
 
 const TYPE_LABELS = {
   missed_pickup: ['Collecte manquee', 'Missed pickup'],
@@ -51,6 +52,7 @@ export default function AdminComplaints() {
     compensation_amount: 0,
   })
   const [saving, setSaving] = useState(false)
+  const [decisionStepUp, setDecisionStepUp] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -108,17 +110,21 @@ export default function AdminComplaints() {
     }
   }
 
-  const recordDecision = async () => {
+  const recordDecision = () => {
     if (decision.summary.trim().length < 10) {
       return toast.error(isEn ? 'Decision justification is required' : 'Une justification detaillee est obligatoire')
     }
+    setDecisionStepUp(true)
+  }
+
+  const submitDecision = async (stepUpToken) => {
     setSaving(true)
     try {
       await adminApi.decideComplaint(selected.uuid, {
         ...decision,
         summary: decision.summary.trim(),
         compensation_amount: Number(decision.compensation_amount || 0),
-      })
+      }, stepUpToken)
       toast.success(isEn ? 'Decision recorded' : 'Decision administrative enregistree')
       await refreshSelected()
     } catch (error) {
@@ -418,6 +424,14 @@ export default function AdminComplaints() {
           </div>
         )}
       </Modal>
+
+      <AdminStepUpModal
+        isOpen={decisionStepUp}
+        onClose={() => setDecisionStepUp(false)}
+        scope="complaint_decision"
+        title={isEn ? 'Confirm decision' : 'Confirmer la decision'}
+        onVerified={submitDecision}
+      />
     </div>
   )
 }

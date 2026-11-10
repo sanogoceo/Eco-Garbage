@@ -3,6 +3,7 @@ const { Server } = require('socket.io');
 const PickupRequest = require('../models/PickupRequest');
 const User = require('../models/User');
 const AuthSession = require('../models/AuthSession');
+const { isAdminTwoFactorRequired } = require('./adminSecurityService');
 
 let io = null;
 const connectionAttempts = new Map();
@@ -42,8 +43,7 @@ const initializeRealtime = (httpServer, allowedOrigins) => {
   io = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)
-          || /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) {
+        if (!origin || allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
         callback(new Error('Origine Socket.IO interdite'));
@@ -71,19 +71,22 @@ const initializeRealtime = (httpServer, allowedOrigins) => {
         return next(error);
       }
       const token = socket.handshake.auth?.token;
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
       if (decoded.type !== 'access' || !decoded.sid) {
         return next(new Error('Session invalide'));
       }
-      const session = await AuthSession.exists({
+      const session = await AuthSession.findOne({
         uuid: decoded.sid,
         user_id: decoded.id,
         revoked_at: null,
         expires_at: { $gt: new Date() },
-      });
+      }).select('mfa_verified').lean();
       if (!session) return next(new Error('Session revoquee'));
       const user = await User.findById(decoded.id).select('role is_active is_verified').lean();
       if (!user?.is_active || !user?.is_verified) return next(new Error('Non autorise'));
+      if (user.role === 'admin' && isAdminTwoFactorRequired() && !session.mfa_verified) {
+        return next(new Error('Double authentification requise'));
+      }
       socket.user = { id: user._id.toString(), role: user.role };
       next();
     } catch {

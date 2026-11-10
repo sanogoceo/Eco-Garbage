@@ -12,12 +12,19 @@ const createRateLimitKey = (req) => (
     : `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`
 );
 
-const createLimiter = ({ windowMs, max, message }) => rateLimit({
+const createLimiter = ({
+  windowMs,
+  max,
+  message,
+  keyGenerator = createRateLimitKey,
+  skipSuccessfulRequests = false,
+}) => rateLimit({
   windowMs,
   max,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  keyGenerator: createRateLimitKey,
+  keyGenerator,
+  skipSuccessfulRequests,
   handler: (req, res, next, options) => {
     const retryAfter = Number.parseInt(res.getHeader('Retry-After'), 10);
     res.status(options.statusCode).json({
@@ -39,6 +46,14 @@ const authLimiter = createLimiter({
   windowMs: 15 * 60_000,
   max: positiveInteger(process.env.AUTH_RATE_LIMIT_PER_15_MINUTES, 15),
   message: 'Trop de tentatives. Reessayez dans 15 minutes.',
+});
+
+const loginAccountLimiter = createLimiter({
+  windowMs: 15 * 60_000,
+  max: positiveInteger(process.env.LOGIN_ACCOUNT_RATE_LIMIT_PER_15_MINUTES, 10),
+  message: 'Trop de tentatives sur ce compte. Reessayez dans 15 minutes.',
+  keyGenerator: (req) => `login:${String(req.body?.email || '').trim().toLowerCase()}`,
+  skipSuccessfulRequests: true,
 });
 
 const collectorApplicationLimiter = createLimiter({
@@ -117,6 +132,7 @@ module.exports = {
   expensiveOperationLimiter,
   globalApiLimiter,
   gpsLimiter,
+  loginAccountLimiter,
   notificationLimiter,
   requestReadLimiter,
   sensitiveActionLimiter,

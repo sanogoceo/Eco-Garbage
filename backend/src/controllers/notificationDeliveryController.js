@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
+const escapeRegex = require('../utils/escapeRegex');
 const {
   retryNotificationDelivery,
 } = require('../services/notificationService');
@@ -40,16 +41,17 @@ const listNotificationDeliveries = async (req, res) => {
       filter[`delivery.${channel}.status`] = { $nin: ['not_required'] };
     }
     if (search) {
+      const pattern = escapeRegex(search);
       const userIds = await mongoose.model('User').find({
         $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } },
+          { name: { $regex: pattern, $options: 'i' } },
+          { email: { $regex: pattern, $options: 'i' } },
         ],
       }).distinct('_id');
       filter.$or = [
         { user_id: { $in: userIds } },
-        { title: { $regex: search, $options: 'i' } },
-        { message: { $regex: search, $options: 'i' } },
+        { title: { $regex: pattern, $options: 'i' } },
+        { message: { $regex: pattern, $options: 'i' } },
       ];
     }
 

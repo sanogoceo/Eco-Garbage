@@ -47,6 +47,7 @@ const businessContractSchema = new mongoose.Schema({
     enum: ['pending', 'active', 'suspended', 'rejected', 'expired'],
     default: 'pending',
   },
+  suspended_by: { type: String, enum: ['customer', 'admin'] },
   reviewed_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   reviewed_at: Date,
   review_notes: { type: String, trim: true, maxlength: 500 },

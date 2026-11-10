@@ -88,6 +88,8 @@
       "forgotPassword": "Oublié ?",
       "submit": "Se connecter",
       "submitting": "Connexion...",
+      "serverWaking": "Démarrage du serveur...",
+      "serverWakingHint": "Le serveur se réveille, cela peut prendre jusqu'à une minute. Ne fermez pas cette page.",
       "success": "Connexion réussie !",
       "fillFields": "Remplissez tous les champs",
       "unverifiedTitle": "Email non vérifié",

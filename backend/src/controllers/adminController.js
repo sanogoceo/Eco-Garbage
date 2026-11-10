@@ -21,6 +21,7 @@ const {
   listServiceConfigurations,
 } = require('../services/serviceConfigurationService');
 const { SERVICE_TYPES } = require('../utils/serviceTypes');
+const { validatePassword } = require('./authController');
 
 const CM_PHONE_REGEX = /^(\+?237)?[62]\d{8}$/;
 const AUDIT_ACTIONS = [
@@ -914,6 +915,9 @@ const createUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Nom, email, mot de passe et rôle requis' });
     if (!['user', 'admin'].includes(role))
       return res.status(400).json({ success: false, message: 'Rôle invalide' });
+    const passwordError = validatePassword(String(password));
+    if (passwordError)
+      return res.status(400).json({ success: false, message: passwordError });
     if (phone) {
       const cleaned = phone.replace(/[\s\-().]/g, '');
       if (!CM_PHONE_REGEX.test(cleaned))

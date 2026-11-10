@@ -7,6 +7,16 @@ const Complaint = require('../models/Complaint');
 const Payment = require('../models/Payment');
 const WasteCategory = require('../models/WasteCategory');
 const User = require('../models/User');
+const { isVehicleCompatible } = require('../services/assignmentService');
+const {
+  hasValidHazardousCertification,
+  isCollectorVerified,
+} = require('../utils/collectorCertification');
+
+const parsePagination = ({ page, limit }) => ({
+  page: Math.max(1, Number.parseInt(page, 10) || 1),
+  limit: Math.min(50, Math.max(1, Number.parseInt(limit, 10) || 10)),
+});
 
 
 
@@ -138,6 +148,11 @@ let _categoriesCache = null;
 let _categoriesCachedAt = 0;
 const CATEGORIES_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+const invalidateCategoriesCache = () => {
+  _categoriesCache = null;
+  _categoriesCachedAt = 0;
+};
+
 const getCategories = async (req, res) => {
   try {
     if (_categoriesCache && Date.now() - _categoriesCachedAt < CATEGORIES_TTL_MS) {
@@ -156,7 +171,8 @@ const getCategories = async (req, res) => {
 
 const getCollectorTasks = async (req, res) => {
   try {
-    const { status, page = 1, limit = 10, archived = 'false' } = req.query;
+    const { status, archived = 'false' } = req.query;
+    const { page, limit } = parsePagination(req.query);
     const filter = { collector_id: req.user.id, is_archived: archived === 'true' };
     if (status) filter.status = status;
     const [raw, total] = await Promise.all([
@@ -164,8 +180,8 @@ const getCollectorTasks = async (req, res) => {
         .populate('user_id', 'name phone')
         .populate('category_id', 'name icon')
         .sort({ created_at: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
+        .skip((page - 1) * limit)
+        .limit(limit)
         .lean(),
       PickupRequest.countDocuments(filter),
     ]);
@@ -175,7 +191,7 @@ const getCollectorTasks = async (req, res) => {
       category_name: r.category_id?.name, category_icon: r.category_id?.icon,
       user_id: r.user_id?._id?.toString(), category_id: r.category_id?._id?.toString(),
     }));
-    res.json({ success: true, data: rows, pagination: { total, page: parseInt(page), limit: parseInt(limit) } });
+    res.json({ success: true, data: rows, pagination: { total, page, limit } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -183,27 +199,48 @@ const getCollectorTasks = async (req, res) => {
 
 const getAvailableCollectorRequests = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const filter = { status: 'pending', collector_id: null };
+    const { page, limit } = parsePagination(req.query);
+    const collector = await User.findById(req.user.id)
+      .select('collector_profile.vehicle_type collector_profile.verification_status collector_profile.verification_expires_at collector_profile.hazardous_certification')
+      .lean();
+    if (!isCollectorVerified(collector)) {
+      return res.json({ success: true, data: [], pagination: { total: 0, page, limit } });
+    }
+    const filter = { status: 'pending', collector_id: null, user_id: { $ne: req.user.id } };
     const [raw, total] = await Promise.all([
       PickupRequest.find(filter)
-        .populate('user_id', 'name phone')
-        .populate('category_id', 'name icon')
+        .select('uuid status service_type estimated_price quantity_number address_details created_at user_id category_id')
+        .populate('user_id', 'name')
+        .populate('category_id', 'name icon is_hazardous')
         .sort({ created_at: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
+        .skip((page - 1) * limit)
+        .limit(limit)
         .lean(),
       PickupRequest.countDocuments(filter),
     ]);
 
-    const rows = raw.map(r => ({
-      ...r, id: r._id.toString(),
-      user_name: r.user_id?.name, user_phone: r.user_id?.phone,
-      category_name: r.category_id?.name, category_icon: r.category_id?.icon,
-      user_id: r.user_id?._id?.toString(), category_id: r.category_id?._id?.toString(),
+    const rows = raw.map((request) => ({
+      uuid: request.uuid,
+      status: request.status,
+      service_type: request.service_type,
+      estimated_price: request.estimated_price,
+      created_at: request.created_at,
+      address: [request.address_details?.district, request.address_details?.city]
+        .filter(Boolean)
+        .join(', ') || 'Adresse communiquee apres acceptation',
+      user_name: request.user_id?.name?.trim().split(/\s+/)[0],
+      category_name: request.category_id?.name,
+      category_icon: request.category_id?.icon,
+      vehicle_compatible: isVehicleCompatible({
+        vehicleType: collector.collector_profile?.vehicle_type || 'foot',
+        quantity: request.quantity_number,
+        serviceType: request.service_type,
+        isHazardous: Boolean(request.category_id?.is_hazardous),
+        hazardousCertified: hasValidHazardousCertification(collector),
+      }),
     }));
 
-    res.json({ success: true, data: rows, pagination: { total, page: parseInt(page), limit: parseInt(limit) } });
+    res.json({ success: true, data: rows, pagination: { total, page, limit } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -263,6 +300,6 @@ const getCollectorStats = async (req, res) => {
 module.exports = {
   getNotifications, markAllRead,
   createRating, createComplaint, getMyComplaints,
-  getPayments, payRequest, getCategories,
+  getPayments, payRequest, getCategories, invalidateCategoriesCache,
   getCollectorTasks, getAvailableCollectorRequests, updateCollectorAvailability, updateCollectorLocation, getCollectorStats,
 };

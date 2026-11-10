@@ -5,8 +5,21 @@ const { v4: uuidv4 } = require('uuid');
 const User = require('../models/User');
 const AuthSession = require('../models/AuthSession');
 const AdminActionGrant = require('../models/AdminActionGrant');
+const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
-const { sendVerificationEmail, sendResetPasswordEmail } = require('../services/emailService');
+const { isEmailConfigured, sendVerificationEmail, sendResetPasswordEmail } = require('../services/emailService');
+const {
+  activateTwoFactor,
+  beginTwoFactorEnrollment,
+  checkAdminCode,
+  createSession: createAdminSession,
+  generateChallengeToken,
+  isAdminTwoFactorRequired,
+  verifyChallengeToken,
+} = require('../services/adminSecurityService');
+
+const ADMIN_SECRET_FIELDS = '+admin_security.totp_secret +admin_security.pending_totp_secret +admin_security.backup_code_hashes';
+const SAFE_USER_EXCLUSIONS = '-password_hash -email_verification_token -email_verification_expires -password_reset_token -password_reset_expires -admin_security';
 
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 const CM_PHONE_REGEX = /^(\+?237)?[62]\d{8}$/;
@@ -23,6 +36,11 @@ const validatePhone = (phone) => {
 };
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const UNKNOWN_ACCOUNT_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
+const RESEND_VERIFICATION_RESPONSE = {
+  success: true,
+  message: 'Si ce compte attend une verification, un email vient d etre envoye.',
+};
 
 const generateToken = (user, sessionId) =>
   jwt.sign(
@@ -58,6 +76,59 @@ const createSession = async (userId, req) => {
   return sessionId;
 };
 
+const hashResetToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
+const revokeUserSessions = (userId, reason, exceptSessionUuid) => AuthSession.updateMany(
+  {
+    user_id: userId,
+    revoked_at: null,
+    ...(exceptSessionUuid ? { uuid: { $ne: exceptSessionUuid } } : {}),
+  },
+  { $set: { revoked_at: new Date(), revocation_reason: reason } }
+);
+
+const toSafeUser = (userDoc) => {
+  const {
+    password_hash,
+    email_verification_token,
+    email_verification_expires,
+    password_reset_token,
+    password_reset_expires,
+    admin_security,
+    ...safeUser
+  } = userDoc.toObject({ virtuals: true });
+  return { ...safeUser, two_factor_enabled: Boolean(admin_security?.two_factor_enabled) };
+};
+
+const recordAdminSecurityEvent = (req, userDoc, action, metadata = {}) => AuditLog.create({
+  actor_id: userDoc._id,
+  action,
+  target_type: 'User',
+  target_id: userDoc._id,
+  metadata,
+  ip: req.ip,
+  user_agent: req.get('user-agent'),
+});
+
+const sendCodeFailure = (res, result) => res.status(result.locked ? 429 : 401).json({
+  success: false,
+  message: result.locked
+    ? 'Trop de codes incorrects. Reessayez dans 15 minutes.'
+    : 'Code d authentification invalide',
+});
+
+const loadChallengeUser = async (req, res, purpose) => {
+  try {
+    const decoded = verifyChallengeToken(req.body.challenge_token, purpose);
+    const userDoc = await User.findById(decoded.id).select(ADMIN_SECRET_FIELDS);
+    if (userDoc?.role === 'admin' && userDoc.is_active) return userDoc;
+  } catch {
+    // An invalid or expired challenge gets the same response as an unknown account.
+  }
+  res.status(401).json({ success: false, message: 'Defi de securite invalide ou expire' });
+  return null;
+};
+
 
 const register = async (req, res) => {
   try {
@@ -91,7 +162,7 @@ const register = async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const uuid = uuidv4();
-    const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER);
+    const requireVerification = isEmailConfigured() || process.env.NODE_ENV === 'production';
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
 
@@ -107,9 +178,9 @@ const register = async (req, res) => {
 
     const userData = {
       uuid, name, email, phone: phone || undefined, password_hash: hash, role,
-      is_verified: !smtpConfigured, // auto-verify when SMTP not configured
-      email_verification_token: smtpConfigured ? verificationToken : null,
-      email_verification_expires: smtpConfigured ? verificationExpires : null,
+      is_verified: !requireVerification,
+      email_verification_token: requireVerification ? verificationToken : null,
+      email_verification_expires: requireVerification ? verificationExpires : null,
     };
     if (role === 'collector') {
       userData.collector_profile = {
@@ -130,13 +201,13 @@ const register = async (req, res) => {
     await Notification.create({
       user_id: userDoc._id,
       title: 'Bienvenue sur EcoGarbage !',
-      message: smtpConfigured
+      message: requireVerification
         ? `Bonjour ${name}, votre compte a ete cree avec succes. Verifiez votre email pour activer votre compte.`
         : `Bonjour ${name}, bienvenue sur EcoGarbage ! Votre compte est actif.`,
       type: 'welcome',
     });
 
-    if (smtpConfigured) {
+    if (requireVerification) {
       try {
         await sendVerificationEmail(email, name, verificationToken);
       } catch (mailErr) {
@@ -156,24 +227,32 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password)
       return res.status(400).json({ success: false, message: 'Email et mot de passe requis' });
 
     const userDoc = await User.findOne({ email: email.toLowerCase() });
-    if (!userDoc)
+    const valid = await bcrypt.compare(password, userDoc?.password_hash || UNKNOWN_ACCOUNT_HASH);
+    if (!userDoc || !valid)
       return res.status(401).json({ success: false, message: 'Email ou mot de passe incorrect' });
     if (!userDoc.is_active)
       return res.status(403).json({ success: false, message: 'Compte suspendu. Contactez le support.' });
     if (!userDoc.is_verified)
       return res.status(403).json({ success: false, message: 'Veuillez verifier votre email avant de vous connecter.', code: 'EMAIL_NOT_VERIFIED' });
 
-    const valid = await bcrypt.compare(password, userDoc.password_hash);
-    if (!valid)
-      return res.status(401).json({ success: false, message: 'Email ou mot de passe incorrect' });
+    const twoFactorEnabled = Boolean(userDoc.admin_security?.two_factor_enabled);
+    if (userDoc.role === 'admin' && (twoFactorEnabled || isAdminTwoFactorRequired())) {
+      return res.json({
+        success: true,
+        code: twoFactorEnabled ? 'ADMIN_2FA_REQUIRED' : 'ADMIN_2FA_SETUP_REQUIRED',
+        message: 'Double authentification requise',
+        data: {
+          challenge_token: generateChallengeToken(userDoc, twoFactorEnabled ? 'verify' : 'setup'),
+        },
+      });
+    }
 
     const sessionId = await createSession(userDoc._id, req);
-    const obj = userDoc.toObject({ virtuals: true });
-    const { password_hash, ...safeUser } = obj;
+    const safeUser = toSafeUser(userDoc);
     const token = generateToken(safeUser, sessionId);
     res.json({ success: true, message: 'Connexion reussie', data: { token, user: safeUser } });
   } catch (err) {
@@ -185,9 +264,18 @@ const login = async (req, res) => {
 
 const getMe = async (req, res) => {
   try {
-    const userDoc = await User.findById(req.user.id).select('-password_hash').lean({ virtuals: true });
+    const [userDoc, securityState] = await Promise.all([
+      User.findById(req.user.id).select(SAFE_USER_EXCLUSIONS).lean({ virtuals: true }),
+      User.findById(req.user.id).select('admin_security.two_factor_enabled').lean(),
+    ]);
     if (!userDoc) return res.status(404).json({ success: false, message: 'Utilisateur non trouve' });
-    res.json({ success: true, data: userDoc });
+    res.json({
+      success: true,
+      data: {
+        ...userDoc,
+        two_factor_enabled: Boolean(securityState?.admin_security?.two_factor_enabled),
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
@@ -220,6 +308,7 @@ const changePassword = async (req, res) => {
     if (pwError) return res.status(400).json({ success: false, message: pwError });
     const hash = await bcrypt.hash(newPassword, 10);
     await User.findByIdAndUpdate(req.user.id, { $set: { password_hash: hash } });
+    await revokeUserSessions(req.user.id, 'password_changed', req.session.uuid);
     res.json({ success: true, message: 'Mot de passe modifie' });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
@@ -230,7 +319,7 @@ const changePassword = async (req, res) => {
 const verifyEmail = async (req, res) => {
   try {
     const { token } = req.query;
-    if (!token) return res.status(400).json({ success: false, message: 'Token manquant' });
+    if (!token || typeof token !== 'string') return res.status(400).json({ success: false, message: 'Token manquant' });
 
     const userDoc = await User.findOne({
       email_verification_token: token,
@@ -256,13 +345,10 @@ const verifyEmail = async (req, res) => {
 const resendVerification = async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: 'Email requis' });
+    if (typeof email !== 'string' || !email) return res.status(400).json({ success: false, message: 'Email requis' });
 
     const userDoc = await User.findOne({ email: email.toLowerCase() });
-    if (!userDoc)
-      return res.status(404).json({ success: false, message: 'Aucun compte associe a cet email' });
-    if (userDoc.is_verified)
-      return res.status(400).json({ success: false, message: 'Cet email est deja verifie' });
+    if (!userDoc || userDoc.is_verified) return res.json(RESEND_VERIFICATION_RESPONSE);
 
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -275,10 +361,9 @@ const resendVerification = async (req, res) => {
       await sendVerificationEmail(userDoc.email, userDoc.name, verificationToken);
     } catch (mailErr) {
       console.error('Resend verification email error:', mailErr);
-      return res.status(500).json({ success: false, message: 'Erreur lors de l\'envoi de l\'email' });
     }
 
-    res.json({ success: true, message: 'Email de verification renvoye. Verifiez votre boite mail.' });
+    res.json(RESEND_VERIFICATION_RESPONSE);
   } catch (err) {
     console.error('resendVerification error:', err);
     res.status(500).json({ success: false, message: 'Erreur serveur' });
@@ -298,7 +383,7 @@ const forgotPassword = async (req, res) => {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    userDoc.password_reset_token = resetToken;
+    userDoc.password_reset_token = hashResetToken(resetToken);
     userDoc.password_reset_expires = resetExpires;
     await userDoc.save();
 
@@ -319,13 +404,15 @@ const forgotPassword = async (req, res) => {
 const resetPassword = async (req, res) => {
   try {
     const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ success: false, message: 'Token et mot de passe requis' });
+    if (typeof token !== 'string' || !token || typeof password !== 'string' || !password) {
+      return res.status(400).json({ success: false, message: 'Token et mot de passe requis' });
+    }
 
     const pwError = validatePassword(password);
     if (pwError) return res.status(400).json({ success: false, message: pwError });
 
     const userDoc = await User.findOne({
-      password_reset_token: token,
+      password_reset_token: hashResetToken(token),
       password_reset_expires: { $gt: new Date() },
     });
 
@@ -336,6 +423,7 @@ const resetPassword = async (req, res) => {
     userDoc.password_reset_token = null;
     userDoc.password_reset_expires = null;
     await userDoc.save();
+    await revokeUserSessions(userDoc._id, 'password_reset');
 
     res.json({ success: true, message: 'Mot de passe reinitialise avec succes. Vous pouvez maintenant vous connecter.' });
   } catch (err) {
@@ -401,16 +489,25 @@ const revokeOtherSessions = async (req, res) => {
 
 const createAdminStepUp = async (req, res) => {
   try {
-    const { scope, password } = req.body;
-    const validScopes = ['collector_review', 'user_status', 'payment_refund', 'service_configuration', 'business_contract_review'];
+    const { scope, password, code } = req.body;
+    const validScopes = [
+      'collector_review', 'user_status', 'payment_refund', 'service_configuration', 'business_contract_review',
+      'user_management', 'complaint_decision', 'withdrawal_review',
+    ];
     if (!scope || !validScopes.includes(scope))
       return res.status(400).json({ success: false, message: 'Scope invalide' });
     if (!password)
       return res.status(400).json({ success: false, message: 'Mot de passe requis' });
-    const userDoc = await User.findById(req.user.id).select('+password_hash');
+    const userDoc = await User.findById(req.user.id).select(ADMIN_SECRET_FIELDS);
     if (!userDoc) return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
     const valid = await bcrypt.compare(password, userDoc.password_hash);
     if (!valid) return res.status(401).json({ success: false, message: 'Mot de passe incorrect' });
+    if (userDoc.admin_security?.two_factor_enabled) {
+      const result = await checkAdminCode(userDoc, code, { allowReuse: true });
+      if (!result.valid) return sendCodeFailure(res, result);
+    } else if (isAdminTwoFactorRequired()) {
+      return res.status(403).json({ success: false, message: 'Activez la double authentification pour continuer' });
+    }
     const grantUuid = uuidv4();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await AdminActionGrant.create({
@@ -425,6 +522,10 @@ const createAdminStepUp = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '5m' }
     );
+    await recordAdminSecurityEvent(req, userDoc, 'admin_security.step_up_granted', {
+      scope,
+      session_uuid: req.session.uuid,
+    });
     res.json({ success: true, data: { token: stepUpToken } });
   } catch (err) {
     console.error('createAdminStepUp error:', err);
@@ -432,15 +533,124 @@ const createAdminStepUp = async (req, res) => {
   }
 };
 
-const notImplemented = (_req, res) =>
-  res.status(501).json({ success: false, message: 'Fonctionnalite non disponible' });
+const issueAdminSession = async (req, userDoc) => {
+  const { token } = await createAdminSession({ user: userDoc, req, mfaVerified: true });
+  return { token, user: toSafeUser(userDoc) };
+};
 
-const startTwoFactorSetup = notImplemented;
-const confirmTwoFactorSetup = notImplemented;
-const verifyTwoFactorLogin = notImplemented;
-const enrollTwoFactor = notImplemented;
-const enableTwoFactor = notImplemented;
-const disableTwoFactor = notImplemented;
+const startTwoFactorSetup = async (req, res) => {
+  try {
+    const userDoc = await loadChallengeUser(req, res, 'setup');
+    if (!userDoc) return undefined;
+    if (userDoc.admin_security?.two_factor_enabled) {
+      return res.status(409).json({ success: false, message: 'Double authentification deja activee' });
+    }
+    return res.json({ success: true, data: await beginTwoFactorEnrollment(userDoc) });
+  } catch (err) {
+    console.error('startTwoFactorSetup error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const confirmTwoFactorSetup = async (req, res) => {
+  try {
+    const userDoc = await loadChallengeUser(req, res, 'setup');
+    if (!userDoc) return undefined;
+    const activation = await activateTwoFactor(userDoc, req.body.code);
+    if (!activation) {
+      return res.status(401).json({ success: false, message: 'Code invalide ou configuration expiree' });
+    }
+    await revokeUserSessions(userDoc._id, 'two_factor_enabled');
+    const sessionData = await issueAdminSession(req, activation.user);
+    await recordAdminSecurityEvent(req, userDoc, 'admin_security.two_factor_enabled', { method: 'login_setup' });
+    return res.json({
+      success: true,
+      data: { ...sessionData, backup_codes: activation.backupCodes },
+    });
+  } catch (err) {
+    console.error('confirmTwoFactorSetup error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const verifyTwoFactorLogin = async (req, res) => {
+  try {
+    const userDoc = await loadChallengeUser(req, res, 'verify');
+    if (!userDoc) return undefined;
+    if (!userDoc.admin_security?.two_factor_enabled) {
+      return res.status(409).json({ success: false, message: 'Double authentification non configuree' });
+    }
+    const result = await checkAdminCode(userDoc, req.body.code);
+    if (!result.valid) return sendCodeFailure(res, result);
+    return res.json({ success: true, data: await issueAdminSession(req, userDoc) });
+  } catch (err) {
+    console.error('verifyTwoFactorLogin error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const enrollTwoFactor = async (req, res) => {
+  try {
+    const userDoc = await User.findById(req.user.id);
+    if (userDoc.admin_security?.two_factor_enabled) {
+      return res.status(409).json({ success: false, message: 'Double authentification deja activee' });
+    }
+    return res.json({ success: true, data: await beginTwoFactorEnrollment(userDoc) });
+  } catch (err) {
+    console.error('enrollTwoFactor error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const enableTwoFactor = async (req, res) => {
+  try {
+    const userDoc = await User.findById(req.user.id).select(ADMIN_SECRET_FIELDS);
+    const activation = await activateTwoFactor(userDoc, req.body.code);
+    if (!activation) {
+      return res.status(401).json({ success: false, message: 'Code invalide ou configuration expiree' });
+    }
+    await Promise.all([
+      revokeUserSessions(userDoc._id, 'two_factor_enabled', req.session.uuid),
+      AuthSession.updateOne({ uuid: req.session.uuid }, { $set: { mfa_verified: true } }),
+    ]);
+    await recordAdminSecurityEvent(req, userDoc, 'admin_security.two_factor_enabled', { method: 'profile' });
+    return res.json({ success: true, data: { backup_codes: activation.backupCodes } });
+  } catch (err) {
+    console.error('enableTwoFactor error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+const disableTwoFactor = async (req, res) => {
+  try {
+    const { password, code } = req.body;
+    if (typeof password !== 'string' || !password || !code) {
+      return res.status(400).json({ success: false, message: 'Mot de passe et code requis' });
+    }
+    const userDoc = await User.findById(req.user.id).select(ADMIN_SECRET_FIELDS);
+    if (!userDoc.admin_security?.two_factor_enabled) {
+      return res.status(409).json({ success: false, message: 'Double authentification non activee' });
+    }
+    if (!await bcrypt.compare(password, userDoc.password_hash)) {
+      return res.status(401).json({ success: false, message: 'Mot de passe incorrect' });
+    }
+    const result = await checkAdminCode(userDoc, code);
+    if (!result.valid) return sendCodeFailure(res, result);
+    await User.updateOne(
+      { _id: userDoc._id },
+      {
+        $set: { 'admin_security.two_factor_enabled': false, 'admin_security.backup_code_hashes': [] },
+        $unset: { 'admin_security.totp_secret': 1, 'admin_security.enabled_at': 1, 'admin_security.last_totp_step': 1 },
+      }
+    );
+    await revokeUserSessions(userDoc._id, 'two_factor_disabled', req.session.uuid);
+    await recordAdminSecurityEvent(req, userDoc, 'admin_security.two_factor_disabled', { method: result.backup ? 'backup_code' : 'totp' });
+    return res.json({ success: true, message: 'Double authentification desactivee' });
+  } catch (err) {
+    console.error('disableTwoFactor error:', err);
+    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
 
 module.exports = {
   register, login, getMe, updateProfile, changePassword,
@@ -449,4 +659,5 @@ module.exports = {
   createAdminStepUp,
   startTwoFactorSetup, confirmTwoFactorSetup, verifyTwoFactorLogin,
   enrollTwoFactor, enableTwoFactor, disableTwoFactor,
+  validatePassword,
 };

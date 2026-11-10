@@ -104,16 +104,27 @@ const cldFolder = (directory) => {
   return `eco-garbage/${name}`;
 };
 
+const parseCloudinaryName = (storedName) => (
+  storedName.startsWith('cld:a:')
+    ? { publicId: storedName.slice(6), type: 'authenticated' }
+    : { publicId: storedName.slice(4), type: 'upload' }
+);
+
 const cldUpload = (buffer, publicId) => new Promise((resolve, reject) => {
   const stream = getCld().uploader.upload_stream(
-    { public_id: publicId, resource_type: 'raw', overwrite: false },
+    { public_id: publicId, resource_type: 'raw', type: 'authenticated', overwrite: false },
     (err, result) => (err ? reject(err) : resolve(result.public_id))
   );
   stream.end(buffer);
 });
 
-const cldDownload = (publicId) => new Promise((resolve, reject) => {
-  const url = getCld().url(publicId, { resource_type: 'raw' });
+const cldDownload = ({ publicId, type }) => new Promise((resolve, reject) => {
+  const url = getCld().url(publicId, {
+    resource_type: 'raw',
+    type,
+    secure: true,
+    sign_url: type === 'authenticated',
+  });
   const mod = url.startsWith('https') ? require('https') : require('http');
   mod.get(url, (res) => {
     if (res.statusCode !== 200) {
@@ -127,13 +138,13 @@ const cldDownload = (publicId) => new Promise((resolve, reject) => {
   }).on('error', reject);
 });
 
-const cldDelete = (publicId) => getCld().uploader.destroy(publicId, { resource_type: 'raw' });
+const cldDelete = ({ publicId, type }) => getCld().uploader.destroy(publicId, { resource_type: 'raw', type });
 
 // ── Exported storage functions ────────────────────────────────────────────────
 
 // Returns the effective stored_name to persist in the database:
 //   - local disk  → the original storedName (e.g. "abc.enc")
-//   - Cloudinary  → "cld:<public_id>"
+//   - Cloudinary  → "cld:a:<public_id>" ("cld:<public_id>" for older public uploads)
 const writeEncryptedFile = async ({
   directory,
   storedName,
@@ -144,7 +155,7 @@ const writeEncryptedFile = async ({
   if (isCloudinaryEnabled()) {
     const publicId = `${cldFolder(directory)}/${storedName.replace(/\.enc$/, '')}`;
     await cldUpload(encrypted, publicId);
-    return `cld:${publicId}`;
+    return `cld:a:${publicId}`;
   }
   await fs.mkdir(directory, { recursive: true });
   const filePath = resolveStoredPath(directory, storedName);
@@ -159,7 +170,7 @@ const readEncryptedFile = async ({
   migrateLegacy = true,
 }) => {
   if (storedName?.startsWith('cld:')) {
-    const payload = await cldDownload(storedName.slice(4));
+    const payload = await cldDownload(parseCloudinaryName(storedName));
     return { buffer: decryptBuffer(payload, context), migrated: false };
   }
   const filePath = resolveStoredPath(directory, storedName);
@@ -187,7 +198,7 @@ const encryptExistingFile = async ({
 
 const deleteStoredFile = async ({ directory, storedName }) => {
   if (storedName?.startsWith('cld:')) {
-    await cldDelete(storedName.slice(4)).catch(() => {});
+    await cldDelete(parseCloudinaryName(storedName)).catch(() => {});
     return;
   }
   const filePath = resolveStoredPath(directory, String(storedName || ''));

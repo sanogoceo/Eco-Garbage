@@ -2,15 +2,20 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../services/api'
 import { PageHeader, PageLoader } from '../../components/common'
+import AdminStepUpModal from '../../components/common/AdminStepUpModal'
 
 export default function AdminWithdrawals() {
   const [rows, setRows] = useState(null)
+  const [pendingReview, setPendingReview] = useState(null)
   const load = () => adminApi.withdrawals().then((response) => setRows(response.data.data || []))
   useEffect(() => { load() }, [])
 
-  const review = async (uuid, decision) => {
+  const review = (uuid, decision) => setPendingReview({ uuid, decision })
+
+  const submitReview = async (stepUpToken) => {
+    if (!pendingReview) return
     try {
-      await adminApi.reviewWithdrawal(uuid, { decision })
+      await adminApi.reviewWithdrawal(pendingReview.uuid, { decision: pendingReview.decision }, stepUpToken)
       toast.success('Retrait mis a jour')
       await load()
     } catch (error) {
@@ -45,6 +50,13 @@ export default function AdminWithdrawals() {
           </tbody>
         </table>
       </div>
+      <AdminStepUpModal
+        isOpen={!!pendingReview}
+        onClose={() => setPendingReview(null)}
+        scope="withdrawal_review"
+        title="Confirmer le retrait"
+        onVerified={submitReview}
+      />
     </div>
   )
 }

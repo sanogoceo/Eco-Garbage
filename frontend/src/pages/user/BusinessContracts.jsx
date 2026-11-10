@@ -160,10 +160,6 @@ export default function BusinessContracts() {
   }
 
   const toggle = async (contract) => {
-    if (!['active', 'suspended'].includes(contract.status)) {
-      toast.error('Ce contrat doit d abord etre valide par l administration')
-      return
-    }
     try {
       await businessContractApi.update(contract.uuid, {
         status: contract.status === 'active' ? 'suspended' : 'active',
@@ -392,7 +388,7 @@ export default function BusinessContracts() {
                     className="btn-outline p-2" title="Tableau entreprise">
                     <Eye size={17} />
                   </button>
-                  {['active', 'suspended'].includes(contract.status) && (
+                  {(contract.status === 'active' || contract.suspended_by === 'customer') && (
                     <button type="button" onClick={() => toggle(contract)} className="btn-outline p-2">
                       {contract.status === 'active' ? <Pause size={17} /> : <Play size={17} />}
                     </button>

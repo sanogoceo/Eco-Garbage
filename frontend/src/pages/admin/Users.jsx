@@ -31,6 +31,7 @@ export default function AdminUsers() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [stepUpTarget, setStepUpTarget] = useState(null)
+  const [managementAction, setManagementAction] = useState(null)
 
   const ROLE_LABELS = { user: t('roles.user'), collector: t('roles.collector'), admin: t('roles.admin') }
 
@@ -69,14 +70,18 @@ export default function AdminUsers() {
     }
   }
 
-  const handleCreateUser = async () => {
+  const requestCreateUser = () => {
     if (!form.name.trim() || !form.email.trim() || !form.password)
       return toast.error(t('admin.users.name') + ', ' + t('admin.users.email') + ', ' + t('admin.users.password') + ' requis')
     if (form.phone && !isValidCmPhone(form.phone))
       return toast.error('Numéro de téléphone camerounais invalide')
+    setManagementAction({ type: 'create' })
+  }
+
+  const handleCreateUser = async (stepUpToken) => {
     setSaving(true)
     try {
-      await adminApi.createUser({ ...form, phone: normalizeCmPhone(form.phone) })
+      await adminApi.createUser({ ...form, phone: normalizeCmPhone(form.phone) }, stepUpToken)
       toast.success(t('admin.users.createSuccess'))
       setCreateModal(false)
       setForm(EMPTY_FORM)
@@ -88,17 +93,21 @@ export default function AdminUsers() {
     }
   }
 
-  const handleDeleteUser = async () => {
-    if (!deleteDialog) return
+  const handleDeleteUser = async (userId, stepUpToken) => {
     try {
-      await adminApi.deleteUser(deleteDialog.userId)
+      await adminApi.deleteUser(userId, stepUpToken)
       toast.success(t('admin.users.deleteSuccess'))
-      setDeleteDialog(null)
       fetchUsers({ role: roleFilter, search })
     } catch (err) {
       toast.error(err.response?.data?.message || t('common.serverError'))
     }
   }
+
+  const runManagementAction = (stepUpToken) => (
+    managementAction?.type === 'delete'
+      ? handleDeleteUser(managementAction.userId, stepUpToken)
+      : handleCreateUser(stepUpToken)
+  )
 
   return (
     <div className="fade-up">
@@ -218,7 +227,7 @@ export default function AdminUsers() {
       <ConfirmDialog
         isOpen={!!deleteDialog}
         onClose={() => setDeleteDialog(null)}
-        onConfirm={handleDeleteUser}
+        onConfirm={() => setManagementAction({ type: 'delete', userId: deleteDialog?.userId })}
         title={t('admin.users.deleteUser')}
         message={t('admin.users.deleteConfirm')}
         confirmLabel={t('common.delete')}
@@ -256,12 +265,20 @@ export default function AdminUsers() {
           </div>
           <div className="flex gap-3 mt-2">
             <button onClick={() => setCreateModal(false)} className="btn-ghost flex-1 justify-center border border-gray-200">{t('common.cancel')}</button>
-            <button onClick={handleCreateUser} disabled={saving} className="btn-primary flex-1 justify-center">
+            <button onClick={requestCreateUser} disabled={saving} className="btn-primary flex-1 justify-center">
               {saving ? (i18n.language?.startsWith('en') ? 'Creating...' : 'Création...') : (i18n.language?.startsWith('en') ? 'Create account' : 'Créer le compte')}
             </button>
           </div>
         </div>
       </Modal>
+
+      <AdminStepUpModal
+        isOpen={!!managementAction}
+        onClose={() => setManagementAction(null)}
+        scope="user_management"
+        title={i18n.language?.startsWith('en') ? 'Confirm account management' : 'Confirmer la gestion du compte'}
+        onVerified={runManagementAction}
+      />
     </div>
   )
 }

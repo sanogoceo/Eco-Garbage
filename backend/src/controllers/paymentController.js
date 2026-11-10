@@ -392,20 +392,13 @@ const paymentWebhook = async (req, res) => {
     const signature = req.get('X-Eco-Signature');
     const rawBody = req.rawBody?.toString('utf8') || '';
     if (!verifyWebhookSignature({ secret, timestamp, signature, rawBody })) {
-      const paymentUuid = req.body?.payment_uuid;
-      const payment = paymentUuid
-        ? await Payment.findOne({ uuid: paymentUuid }).select('_id user_id request_id').lean()
-        : null;
       await recordFraudAlert({
         category: 'suspicious_payment',
-        dedupeKey: `invalid-webhook:${paymentUuid || req.ip}`,
-        score: 90,
+        dedupeKey: `invalid-webhook:${new Date().toISOString().slice(0, 10)}`,
+        score: 50,
         title: 'Webhook de paiement non authentifie',
-        description: 'Une tentative de confirmation avec une signature invalide a ete rejetee.',
-        signals: [{ code: 'invalid_webhook_signature', weight: 90, details: {} }],
-        subjectUserId: payment?.user_id,
-        paymentId: payment?._id,
-        pickupRequestId: payment?.request_id,
+        description: 'Des tentatives de confirmation avec une signature invalide ont ete rejetees.',
+        signals: [{ code: 'invalid_webhook_signature', weight: 50, details: {} }],
       });
       return res.status(401).json({ success: false, message: 'Signature webhook invalide' });
     }

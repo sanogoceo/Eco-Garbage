@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Copy, Eye, EyeOff, Leaf, LogIn, ShieldCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useTranslation } from 'react-i18next'
-import { authApi } from '../../services/api'
+import { authApi, waitForServer } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { Spinner } from '../../components/common'
 
@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [waking, setWaking] = useState(false)
   const [unverified, setUnverified] = useState(false)
   const [resending, setResending] = useState(false)
   const [security, setSecurity] = useState(null)
@@ -21,13 +22,26 @@ export default function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
 
+  const loginWhenServerReady = async () => {
+    try {
+      return await authApi.login(form)
+    } catch (err) {
+      if (err.response) throw err
+      setWaking(true)
+      const ready = await waitForServer()
+      setWaking(false)
+      if (!ready) throw err
+      return authApi.login(form)
+    }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.email || !form.password) return toast.error(t('auth.login.fillFields'))
     setUnverified(false)
     setLoading(true)
     try {
-      const { data } = await authApi.login(form)
+      const { data } = await loginWhenServerReady()
       if (data.code === 'ADMIN_2FA_REQUIRED') {
         setSecurity({
           mode: 'verify',
@@ -199,8 +213,13 @@ export default function LoginPage() {
               </div>
               <button type="submit" disabled={loading} className="btn-primary w-full justify-center py-3.5">
                 {loading ? <Spinner size="sm" /> : <LogIn size={16} />}
-                {loading ? t('auth.login.submitting') : t('auth.login.submit')}
+                {waking
+                  ? t('auth.login.serverWaking')
+                  : loading ? t('auth.login.submitting') : t('auth.login.submit')}
               </button>
+              {waking && (
+                <p className="text-xs text-center text-gray-500">{t('auth.login.serverWakingHint')}</p>
+              )}
             </form>}
 
             {security?.mode === 'setup' && (
