@@ -13,7 +13,7 @@ if (!process.env.JWT_SECRET) {
 if (process.env.NODE_ENV === 'production') {
   for (const name of ['JWT_SECRET', 'DATA_ENCRYPTION_KEY', 'PAYMENT_WEBHOOK_SECRET']) {
     const value = process.env[name] || '';
-    if (value.length < 32 || /replace_me/i.test(value)) {
+    if (value.length < 32 || /replace_me|changeme/i.test(value)) {
       console.error(`FATAL: ${name} must be a random secret of at least 32 characters. Exiting.`);
       process.exit(1);
     }
